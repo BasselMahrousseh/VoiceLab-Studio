@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+      - "5173:5173"
+    volumes:
+      # Persist SQLite DB, WAV masters, exports, auth secret
+      - voicelab-data:/app/data
+    # Optional: copy .env.example → .env and uncomment:
+    # env_file: .env
+    environment:
+      DATA_DIR: /app/data
+      HOST: "0.0.0.0"
+      VITE_HOST: "0.0.0.0"
+
+volumes:
+  voicelab-data:
