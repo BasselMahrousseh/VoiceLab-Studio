@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -163,10 +163,16 @@ def recording_audio(
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
-    path = storage.abs_audio_path(settings, r.rel_path)
-    if not path.exists():
-        raise HTTPException(404, "Audio file missing on disk")
-    return FileResponse(path, media_type="audio/wav", filename=path.name)
+    try:
+        content = storage.read_master(settings, r.rel_path)
+    except Exception as exc:
+        raise HTTPException(404, f"Audio file unavailable: {exc}")
+    filename = r.rel_path.rsplit("/", 1)[-1]
+    return Response(
+        content,
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.post("/{rec_id}/accept", response_model=RecordingOut)
@@ -218,7 +224,10 @@ def verify_recording(
             "ASR endpoint is not configured. Set ASR_DEPLOYMENT (and endpoint/key "
             "if different from the LLM resource) in .env",
         )
-    wav = storage.abs_audio_path(settings, r.rel_path)
+    try:
+        wav = storage.read_master(settings, r.rel_path)
+    except Exception as exc:
+        raise HTTPException(404, f"Audio file unavailable: {exc}")
     result = verify_against_script(wav, r.script.training_text, settings)
     r.asr_status = result["status"]
     r.asr_text = result["asr_text"]

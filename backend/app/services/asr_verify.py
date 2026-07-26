@@ -9,6 +9,7 @@ script, defeating the purpose of verification.
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 from ..config import Settings
@@ -18,12 +19,29 @@ from . import text_normalize as tn
 def _client(settings: Settings):
     if settings.asr_provider == "azure":
         from openai import AzureOpenAI
+        kwargs = {
+            "azure_endpoint": (
+                settings.asr_azure_endpoint or settings.azure_openai_endpoint
+            ),
+            "api_version": (
+                settings.asr_azure_api_version
+                or settings.azure_openai_api_version
+            ),
+        }
+        key = settings.asr_azure_api_key or settings.azure_openai_api_key
+        if key:
+            kwargs["api_key"] = key
+        else:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-        return AzureOpenAI(
-            azure_endpoint=settings.asr_azure_endpoint or settings.azure_openai_endpoint,
-            api_key=settings.asr_azure_api_key or settings.azure_openai_api_key,
-            api_version=settings.asr_azure_api_version or settings.azure_openai_api_version,
-        )
+            credential = DefaultAzureCredential(
+                managed_identity_client_id=settings.azure_client_id or None,
+                exclude_interactive_browser_credential=True,
+            )
+            kwargs["azure_ad_token_provider"] = get_bearer_token_provider(
+                credential, "https://cognitiveservices.azure.com/.default"
+            )
+        return AzureOpenAI(**kwargs)
     from openai import OpenAI
 
     return OpenAI(
@@ -32,9 +50,16 @@ def _client(settings: Settings):
     )
 
 
-def transcribe(wav_path: Path, settings: Settings) -> str:
+def transcribe(wav_source: Path | bytes, settings: Settings) -> str:
     client = _client(settings)
-    with open(wav_path, "rb") as f:
+    if isinstance(wav_source, bytes):
+        f = io.BytesIO(wav_source)
+        f.name = "take.wav"
+        close = f.close
+    else:
+        f = open(wav_source, "rb")
+        close = f.close
+    try:
         result = client.audio.transcriptions.create(
             model=settings.asr_deployment,
             file=f,
@@ -42,17 +67,21 @@ def transcribe(wav_path: Path, settings: Settings) -> str:
             response_format="json",
             temperature=0.0,
         )
+    finally:
+        close()
     return (result.text or "").strip()
 
 
-def verify_against_script(wav_path: Path, script_text: str, settings: Settings) -> dict:
+def verify_against_script(
+    wav_source: Path | bytes, script_text: str, settings: Settings
+) -> dict:
     """Transcribe and score against the intended transcript.
 
     Returns {status, asr_text, cer, wer, detail}. Status is one of
     match / minor_mismatch / major_mismatch / error.
     """
     try:
-        asr_text = transcribe(wav_path, settings)
+        asr_text = transcribe(wav_source, settings)
     except Exception as exc:  # endpoint/config errors surface to the reviewer
         return {
             "status": "error",

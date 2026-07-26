@@ -35,7 +35,7 @@ from .audio_io import (
     write_wav_pcm16,
 )
 from .audio_qc import find_speech_bounds
-from .storage import abs_audio_path
+from . import storage
 
 
 def _slug(name: str) -> str:
@@ -94,7 +94,7 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
 
     for rec in out:
         try:
-            audio = load_wav(abs_audio_path(settings, rec.rel_path))
+            audio = load_wav(storage.read_master(settings, rec.rel_path))
             x = audio.mono()
             if trim_silence:
                 start, end = find_speech_bounds(x, audio.sample_rate)
@@ -184,6 +184,9 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
                 if p.is_file():
                     zf.write(p, p.relative_to(root.parent))
         zip_rel = f"{batch_slug}/{batch_slug}.zip"
+
+    # The generated tree includes dataset/ and, when requested, the ZIP beside it.
+    storage.save_export_tree(settings, root.parent, batch_slug)
 
     batch = ExportBatch(
         name=name,

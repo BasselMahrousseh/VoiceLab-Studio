@@ -8,6 +8,7 @@ dataset-quality platform for building TTS / voice-cloning training data.
 | [ARCHITECTURE.md](ARCHITECTURE.md) | System overview, components, request flows, audio pipeline, security, diagrams |
 | [TECH_STACK.md](TECH_STACK.md) | Every technology used, versions, and why |
 | [DATA_AND_STORAGE.md](DATA_AND_STORAGE.md) | Where data is saved, the database, full schema, file layout, backups, migrations |
+| [AZURE_APP_SERVICE.md](AZURE_APP_SERVICE.md) | PROD GitHub Actions deployment, Managed Identity, Blob Storage, persistent SQLite |
 
 See also the repo root [README.md](../README.md) (quick start & workflow),
 [POLICY.md](../POLICY.md) (Arabic/Emirati text policy), and

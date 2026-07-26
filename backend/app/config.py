@@ -44,6 +44,14 @@ class Settings(BaseSettings):
 
     # --- storage ---
     data_dir: Path = Path("data")
+    storage_backend: str = "local"  # "local" | "azure_blob"
+    azure_storage_account_url: str = ""
+    azure_storage_container: str = "voicelab"
+    azure_storage_audio_prefix: str = "audio"
+    azure_storage_export_prefix: str = "exports"
+    azure_storage_backup_prefix: str = "database-backups"
+    # Client ID of the user-assigned managed identity attached to App Service.
+    azure_client_id: str = ""
     # Default: sqlite file inside data_dir. Set DATABASE_URL for Postgres/Oracle.
     database_url: str = ""
 
@@ -89,6 +97,7 @@ class Settings(BaseSettings):
     asr_azure_api_version: str = ""
     asr_openai_base_url: str = ""
     asr_openai_api_key: str = ""
+    realtime_asr_deployment: str = ""
     asr_language: str = "ar"
     # Compare digits as Arabic words before scoring (recommended: scripts often
     # contain digits that the speaker verbalizes).
@@ -143,7 +152,10 @@ class Settings(BaseSettings):
         if not self.llm_deployment:
             return False
         if self.llm_provider == "azure":
-            return bool(self.azure_openai_endpoint and self.azure_openai_api_key)
+            return bool(
+                self.azure_openai_endpoint
+                and (self.azure_openai_api_key or self.azure_client_id)
+            )
         return bool(self.openai_base_url or self.openai_api_key)
 
     def asr_configured(self) -> bool:
@@ -152,11 +164,18 @@ class Settings(BaseSettings):
         if self.asr_provider == "azure":
             endpoint = self.asr_azure_endpoint or self.azure_openai_endpoint
             key = self.asr_azure_api_key or self.azure_openai_api_key
-            return bool(endpoint and key)
+            return bool(endpoint and (key or self.azure_client_id))
         return bool(
             self.asr_openai_base_url
             or self.asr_openai_api_key
             or self.openai_api_key
+        )
+
+    def blob_storage_configured(self) -> bool:
+        return (
+            self.storage_backend == "azure_blob"
+            and bool(self.azure_storage_account_url)
+            and bool(self.azure_storage_container)
         )
 
 

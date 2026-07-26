@@ -84,12 +84,23 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
 def _client(settings: Settings):
     if settings.llm_provider == "azure":
         from openai import AzureOpenAI
+        kwargs = {
+            "azure_endpoint": settings.azure_openai_endpoint,
+            "api_version": settings.azure_openai_api_version,
+        }
+        if settings.azure_openai_api_key:
+            kwargs["api_key"] = settings.azure_openai_api_key
+        else:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
-        return AzureOpenAI(
-            azure_endpoint=settings.azure_openai_endpoint,
-            api_key=settings.azure_openai_api_key,
-            api_version=settings.azure_openai_api_version,
-        )
+            credential = DefaultAzureCredential(
+                managed_identity_client_id=settings.azure_client_id or None,
+                exclude_interactive_browser_credential=True,
+            )
+            kwargs["azure_ad_token_provider"] = get_bearer_token_provider(
+                credential, "https://cognitiveservices.azure.com/.default"
+            )
+        return AzureOpenAI(**kwargs)
     from openai import OpenAI
 
     return OpenAI(

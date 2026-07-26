@@ -1,0 +1,108 @@
+name: Deploy PROD to Azure App Service
+
+on:
+  push:
+    branches:
+      - PROD
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: voicelab-prod
+  cancel-in-progress: true
+
+env:
+  AZURE_WEBAPP_NAME: AI-Cognitive-SandBox-VoiceLab
+  AZURE_RESOURCE_GROUP: CIT-AI-Cognitive-Dev-AISandBox-RG-01
+  PYTHON_VERSION: "3.13"
+  NODE_VERSION: "22"
+
+jobs:
+  build-test-deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Check out PROD
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install backend dependencies
+        run: python -m pip install -r backend/requirements.txt
+
+      - name: Test backend
+        run: python -m pytest backend/tests -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build and type-check frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --omit=dev --audit-level=high
+          npm run typecheck
+          npm run build
+
+      - name: Assemble App Service package
+        shell: bash
+        run: |
+          mkdir -p deploy/frontend
+          cp -R backend deploy/backend
+          cp -R frontend/dist deploy/frontend/dist
+          cp requirements.txt startup.sh README.md POLICY.md deploy/
+          cd deploy
+          zip -r ../voicelab-prod.zip .
+
+      - name: Sign in to Azure with GitHub OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure App Service production settings
+        shell: bash
+        run: |
+          az webapp config set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --startup-file "bash startup.sh" \
+            --always-on true
+          az webapp config appsettings set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+              DATA_DIR=/home/data \
+              STORAGE_BACKEND=azure_blob \
+              AZURE_STORAGE_ACCOUNT_URL=https://aicognitivesandboxstrg.blob.core.windows.net \
+              AZURE_STORAGE_CONTAINER=voicelab \
+              AZURE_CLIENT_ID="${{ vars.AZURE_MANAGED_IDENTITY_CLIENT_ID }}" \
+              LLM_PROVIDER=azure \
+              AZURE_OPENAI_ENDPOINT=https://AICognitiveDevAISandBoxOpenAI-01.openai.azure.com/ \
+              LLM_DEPLOYMENT=gpt-5.6-sol \
+              LLM_API_STYLE=responses \
+              ASR_PROVIDER=azure \
+              ASR_DEPLOYMENT=gpt-4o-transcribe \
+              ASR_LANGUAGE=ar \
+              REALTIME_ASR_DEPLOYMENT=gpt-realtime-whisper
+
+      - name: Deploy application package
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ env.AZURE_WEBAPP_NAME }}
+          slot-name: Production
+          package: voicelab-prod.zip
