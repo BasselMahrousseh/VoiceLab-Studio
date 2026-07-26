@@ -18,17 +18,14 @@ App Service `PORT`.
 
 ## GitHub configuration
 
-Create a GitHub environment named `production`. Configure these environment or
-repository secrets for Azure OIDC:
+The Azure portal created the repository secrets used by the workflow:
 
-- `AZURE_CLIENT_ID`: client ID of the identity used by GitHub Actions to deploy
-- `AZURE_TENANT_ID`: `956d0a5b-65df-40ee-b210-145b0e79eac8`
-- `AZURE_SUBSCRIPTION_ID`: `8133fc6d-2303-439c-b881-f8df6b912bef`
+- `AZUREAPPSERVICE_CLIENTID_C8B149B4708B4B48A8AF823C22264C97`
+- `AZUREAPPSERVICE_TENANTID_18201DE120B044889389130FE024BC74`
+- `AZUREAPPSERVICE_SUBSCRIPTIONID_B949D3BC6DCA4646BD06F2206414232B`
 
-Configure this GitHub variable:
-
-- `AZURE_MANAGED_IDENTITY_CLIENT_ID`: client ID of the user-assigned managed
-  identity `AI-Cognitive-General`
+The runtime client ID for `AI-Cognitive-General` is non-secret and is configured
+directly as the App Service `AZURE_CLIENT_ID` setting.
 
 The GitHub deployment identity and the App Service runtime identity may be the
 same Azure identity, but separate least-privilege identities are preferable.
