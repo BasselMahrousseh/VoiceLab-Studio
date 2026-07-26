@@ -81,9 +81,29 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
     return "\n".join(lines)
 
 
-def _client(settings: Settings):
+def _client(settings: Settings, api_style: str = "chat"):
     if settings.llm_provider == "azure":
-        from openai import AzureOpenAI
+        from openai import AzureOpenAI, OpenAI
+
+        if api_style == "responses":
+            # Azure's current Responses API is exposed through the OpenAI v1
+            # route, not the legacy deployment + api-version route constructed
+            # by AzureOpenAI.
+            base_url = f"{settings.azure_openai_endpoint.rstrip('/')}/openai/v1/"
+            if settings.azure_openai_api_key:
+                api_key = settings.azure_openai_api_key
+            else:
+                from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+                credential = DefaultAzureCredential(
+                    managed_identity_client_id=settings.azure_client_id or None,
+                    exclude_interactive_browser_credential=True,
+                )
+                api_key = get_bearer_token_provider(
+                    credential, "https://ai.azure.com/.default"
+                )
+            return OpenAI(base_url=base_url, api_key=api_key)
+
         kwargs = {
             "azure_endpoint": settings.azure_openai_endpoint,
             "api_version": settings.azure_openai_api_version,
@@ -159,7 +179,6 @@ def _generate_via_chat(client, settings: Settings, messages: list[dict]) -> str:
 
 def generate_scripts(params: dict, settings: Settings) -> list[dict]:
     """Call the configured LLM deployment and return raw generated items."""
-    client = _client(settings)
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": build_user_prompt(params, settings)},
@@ -168,13 +187,17 @@ def generate_scripts(params: dict, settings: Settings) -> list[dict]:
     style = getattr(settings, "llm_api_style", "auto")
 
     if style == "chat":
+        client = _client(settings, "chat")
         content = _generate_via_chat(client, settings, messages)
     elif style == "responses":
+        client = _client(settings, "responses")
         content = _generate_via_responses(client, settings, messages, count)
     else:  # auto: prefer Responses (needed by gpt-5.x), fall back to Chat
         try:
+            client = _client(settings, "responses")
             content = _generate_via_responses(client, settings, messages, count)
         except Exception:
+            client = _client(settings, "chat")
             content = _generate_via_chat(client, settings, messages)
 
     data = _extract_json(content)
