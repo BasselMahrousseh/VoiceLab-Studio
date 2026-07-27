@@ -681,6 +681,7 @@ textarea.input {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  padding: 16px;
   background: rgba(20, 23, 28, 0.42);
   backdrop-filter: blur(2px);
   display: flex;
@@ -693,18 +694,20 @@ textarea.input {
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
-  width: min(560px, 92vw);
-  max-height: 88vh;
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   box-shadow: var(--shadow-lg);
   animation: fadeIn 0.22s var(--ease) both;
 }
 .modal.wide {
-  width: min(860px, 94vw);
+  width: min(860px, 100%);
 }
 .modal-head {
   display: flex;
+  flex: 0 0 auto;
   justify-content: space-between;
   align-items: center;
   padding: 14px 18px;
@@ -714,8 +717,24 @@ textarea.input {
   margin: 0;
 }
 .modal-body {
+  min-height: 0;
   padding: 16px 18px;
   overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.modal-actions {
+  position: sticky;
+  z-index: 2;
+  bottom: -16px;
+  margin: 12px -18px -16px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.96);
+  border-top: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  flex-wrap: wrap;
+}
+body.modal-open {
+  overflow: hidden;
 }
 
 /* ---------- forms ---------- */
@@ -1139,5 +1158,24 @@ textarea.input {
   }
   .form-grid {
     grid-template-columns: 1fr;
+  }
+  .modal-backdrop {
+    padding: 8px;
+  }
+  .modal {
+    max-height: calc(100dvh - 16px);
+    border-radius: 12px;
+  }
+  .modal-body {
+    padding: 14px;
+  }
+  .modal-actions {
+    bottom: -14px;
+    margin: 12px -14px -14px;
+    padding: 12px 14px;
+  }
+  .modal-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 }

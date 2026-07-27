@@ -152,7 +152,14 @@ function CreateDatasetModal({
       <div className="form-grid">
         <label>
           Dataset name
-          <input className="input" placeholder="Emirati Customer Support v1" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          <input
+            className="input"
+            placeholder="Emirati Customer Support v1"
+            value={form.name}
+            maxLength={200}
+            required
+            onChange={(e) => setForm({ ...form, name: e.target.value })}
+          />
         </label>
         <label>
           Dialect
@@ -193,8 +200,8 @@ function CreateDatasetModal({
         </label>
       </div>
       {error && <div className="banner warn">{error}</div>}
-      <div className="row gap" style={{ marginTop: 12 }}>
-        <button className="btn accept" onClick={create} disabled={busy}>
+      <div className="row gap modal-actions">
+        <button className="btn accept" onClick={create} disabled={busy || !form.name.trim()}>
           {busy ? <Spinner label="Creating…" /> : "Create dataset"}
         </button>
         <button className="btn ghost" onClick={onClose}>

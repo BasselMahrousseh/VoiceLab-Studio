@@ -54,6 +54,13 @@ export default function GenAIWizard({
   );
   const batchWords = Math.max(2, Math.round(plan.avg_duration_sec * 2.3));
   const llmReady = !!status?.llm_configured;
+  const planValid =
+    !!plan.name.trim() &&
+    plan.target_sample_count > 0 &&
+    plan.avg_duration_sec > 0 &&
+    plan.generate_count > 0 &&
+    plan.styles.length > 0 &&
+    plan.domains.length > 0;
 
   const set = (patch: Partial<typeof plan>) => setPlan((p) => ({ ...p, ...patch }));
 
@@ -143,7 +150,14 @@ export default function GenAIWizard({
           <div className="form-grid">
             <label>
               Dataset name
-              <input className="input" placeholder="Emirati Customer Support v1" value={plan.name} onChange={(e) => set({ name: e.target.value })} />
+              <input
+                className="input"
+                placeholder="Emirati Customer Support v1"
+                value={plan.name}
+                maxLength={200}
+                required
+                onChange={(e) => set({ name: e.target.value })}
+              />
             </label>
             <label>
               Dialect
@@ -160,11 +174,11 @@ export default function GenAIWizard({
 
             <label>
               Target samples
-              <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Number(e.target.value) })} />
+              <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Math.max(1, Number(e.target.value) || 1) })} />
             </label>
             <label>
               Avg. duration / clip (sec)
-              <input type="number" min={1} max={60} className="input" value={plan.avg_duration_sec} onChange={(e) => set({ avg_duration_sec: Number(e.target.value) })} />
+              <input type="number" min={1} max={60} className="input" value={plan.avg_duration_sec} onChange={(e) => set({ avg_duration_sec: Math.min(60, Math.max(1, Number(e.target.value) || 1)) })} />
             </label>
           </div>
 
@@ -215,13 +229,13 @@ export default function GenAIWizard({
             </label>
             <label>
               Generate now (first batch)
-              <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Number(e.target.value)) })} />
+              <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Math.max(1, Number(e.target.value) || 1)) })} />
             </label>
           </div>
 
           {error && <div className="banner error">{error}</div>}
-          <div className="row gap" style={{ marginTop: 12 }}>
-            <button className="btn record" onClick={generate} disabled={busy || !llmReady}>
+          <div className="row gap modal-actions">
+            <button className="btn record" onClick={generate} disabled={busy || !llmReady || !planValid}>
               {busy ? <Spinner label="Generating with GPT-5.6-sol…" /> : `✨ Generate ${plan.generate_count} with GenAI`}
             </button>
             <button className="btn ghost" onClick={onClose}>Cancel</button>
@@ -275,7 +289,7 @@ export default function GenAIWizard({
             ))}
           </div>
           {error && <div className="banner error">{error}</div>}
-          <div className="row gap" style={{ marginTop: 12 }}>
+          <div className="row gap modal-actions">
             <button className="btn accept" onClick={createDataset} disabled={busy || selected.size === 0}>
               {busy ? <Spinner label="Creating dataset…" /> : `Create dataset with ${selected.size} scripts`}
             </button>
