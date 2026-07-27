@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { get, mediaUrl, post } from "../api";
 import QcPanel from "../components/QcPanel";
 import { AsrChip, Chip, HumanChip, QcChip, Spinner } from "../components/widgets";
-import { AppStatus, Recording } from "../types";
+import { AppStatus, Dataset, Recording } from "../types";
 
 const PAGE = 20;
 
@@ -14,6 +14,8 @@ export default function Review({
   onChanged: () => void;
 }) {
   const [items, setItems] = useState<Recording[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasetId, setDatasetId] = useState(0);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
   const [needsReview, setNeedsReview] = useState(true);
@@ -26,6 +28,7 @@ export default function Review({
   const load = useCallback(() => {
     const params = new URLSearchParams();
     if (needsReview) params.set("needs_review", "true");
+    if (datasetId) params.set("dataset_id", String(datasetId));
     if (humanStatus) params.set("human_status", humanStatus);
     if (qcStatus) params.set("qc_status", qcStatus);
     if (asrStatus) params.set("asr_status", asrStatus);
@@ -37,9 +40,12 @@ export default function Review({
         setTotal(r.total);
       })
       .catch((e) => setError(e.message));
-  }, [needsReview, humanStatus, qcStatus, asrStatus, page]);
+  }, [needsReview, datasetId, humanStatus, qcStatus, asrStatus, page]);
 
   useEffect(load, [load]);
+  useEffect(() => {
+    get<Dataset[]>("/api/datasets").then(setDatasets).catch((e) => setError(e.message));
+  }, []);
 
   const update = (updated: Recording) => {
     setItems((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
@@ -54,6 +60,12 @@ export default function Review({
       </div>
       {error && <div className="banner error">{error}</div>}
       <div className="row gap filter-bar">
+        <select className="input" value={datasetId} onChange={(e) => { setDatasetId(Number(e.target.value)); setPage(0); }}>
+          <option value={0}>All datasets</option>
+          {datasets.map((dataset) => (
+            <option key={dataset.id} value={dataset.id}>{dataset.name}</option>
+          ))}
+        </select>
         <label className="check">
           <input type="checkbox" checked={needsReview} onChange={(e) => { setNeedsReview(e.target.checked); setPage(0); }} />
           Needs attention (pending / QC issues / ASR mismatch)
@@ -148,6 +160,7 @@ function ReviewRow({
       <div className="row spread clickable" onClick={onToggle}>
         <div className="row gap">
           <span className="mono small">{rec.script?.script_id}</span>
+          {rec.script && <Chip tone="accent">{rec.script.language}</Chip>}
           <Chip>take {rec.take_number}</Chip>
           <span className="muted small">{rec.duration_sec.toFixed(1)}s</span>
         </div>
@@ -160,11 +173,11 @@ function ReviewRow({
       </div>
       {open && (
         <div className="review-detail">
-          <div className="arabic script-display small-display" dir="rtl">
+          <div className="arabic script-display small-display" dir="auto">
             {rec.script?.display_text}
           </div>
           {rec.script && rec.script.training_text !== rec.script.display_text && (
-            <div className="arabic muted" dir="rtl">
+            <div className="arabic muted" dir="auto">
               {rec.script.training_text}
             </div>
           )}
@@ -175,7 +188,7 @@ function ReviewRow({
           </label>
           <textarea
             className="input arabic edit-area"
-            dir="rtl"
+            dir="auto"
             rows={2}
             value={finalText}
             onChange={(e) => setFinalText(e.target.value)}

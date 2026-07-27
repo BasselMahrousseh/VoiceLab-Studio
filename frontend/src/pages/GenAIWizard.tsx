@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { post, streamPost } from "../api";
+import { get, post, streamPost } from "../api";
 import { Chip, Modal, MultiSelect, Spinner } from "../components/widgets";
 import { AppStatus, Dataset, GenerateCandidate } from "../types";
 
 const DEFAULT_INSTRUCTIONS = `• Record in a quiet room with no echo, fans, or background voices.
 • Keep a steady hand-width distance from the microphone.
-• Read the sentence exactly as shown, in natural Emirati dialect.
+• Read the sentence exactly as shown, in its natural language and dialect.
 • Speak at a calm, even pace — don't rush the ends of sentences.
 • If you stumble or mispronounce, just press Restart and read it again.
 • Leave a short beat of silence before you start and after you finish.`;
@@ -34,6 +34,8 @@ export default function GenAIWizard({
     name: dataset?.name ?? "",
     description: dataset?.description ?? "",
     dialect: dataset?.dialect ?? "emirati",
+    languages: (dataset?.languages?.length ? dataset.languages : ["ar-AE"]) as string[],
+    text_policy: dataset?.text_policy ?? "",
     instructions: dataset?.instructions ?? DEFAULT_INSTRUCTIONS,
     target_sample_count: dataset?.target_sample_count || 200,
     avg_duration_sec: dataset?.target_avg_duration_sec || 6,
@@ -51,9 +53,15 @@ export default function GenAIWizard({
   const [saving, setSaving] = useState(false);
   const [generated, setGenerated] = useState(0);
   const [error, setError] = useState("");
+  const [globalPolicy, setGlobalPolicy] = useState("");
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    get<{ text: string }>("/api/policy")
+      .then((response) => setGlobalPolicy(response.text))
+      .catch((e) => setError(e.message));
+  }, []);
 
   const projected = useMemo(
     () => plan.target_sample_count * plan.avg_duration_sec,
@@ -67,7 +75,8 @@ export default function GenAIWizard({
     plan.avg_duration_sec > 0 &&
     plan.generate_count > 0 &&
     plan.styles.length > 0 &&
-    plan.domains.length > 0;
+    plan.domains.length > 0 &&
+    plan.languages.length > 0;
 
   const set = (patch: Partial<typeof plan>) => setPlan((p) => ({ ...p, ...patch }));
 
@@ -101,7 +110,9 @@ export default function GenAIWizard({
           count: plan.generate_count,
           styles: plan.styles,
           domains: plan.domains,
+          languages: plan.languages,
           dialect: plan.dialect,
+          policy_text: plan.text_policy,
           coverage: plan.coverage,
           topics: plan.topics,
           brand_terms: plan.brand_terms,
@@ -159,6 +170,8 @@ export default function GenAIWizard({
           description: plan.description,
           instructions: plan.instructions,
           dialect: plan.dialect,
+          languages: plan.languages,
+          text_policy: plan.text_policy,
           target_sample_count: plan.target_sample_count,
           target_avg_duration_sec: plan.avg_duration_sec,
         });
@@ -168,6 +181,7 @@ export default function GenAIWizard({
           display_text: c.display_text,
           training_text: c.training_text,
           msa_equivalent: c.msa_equivalent,
+          language: c.language,
           dialect: c.dialect,
           style: c.style,
           domain: c.domain,
@@ -221,12 +235,23 @@ export default function GenAIWizard({
               </label>
             )}
             <label>
-              Dialect
+              Arabic dialect
               <select className="input" value={plan.dialect} onChange={(e) => set({ dialect: e.target.value })}>
                 {(status?.enums.dialects ?? ["emirati", "msa", "mixed"]).map((d) => (
                   <option key={d}>{d}</option>
                 ))}
               </select>
+            </label>
+            <label className="span2">
+              Languages to generate
+              <MultiSelect
+                options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
+                value={plan.languages}
+                onChange={(languages) => set({ languages })}
+              />
+              <span className="muted small">
+                The model distributes records across these choices and every candidate receives a language tag.
+              </span>
             </label>
             {!dataset && (
               <label className="span2">
@@ -286,7 +311,7 @@ export default function GenAIWizard({
             </label>
             <label className="span2">
               Topic seeds (optional)
-              <textarea className="input arabic" dir="rtl" rows={2} placeholder="تفعيل باقة، شكوى فاتورة، استفسار عن التغطية…" value={plan.topics} onChange={(e) => set({ topics: e.target.value })} />
+              <textarea className="input" dir="auto" rows={2} placeholder="تفعيل باقة، billing question, network coverage…" value={plan.topics} onChange={(e) => set({ topics: e.target.value })} />
             </label>
             {!dataset && (
               <label className="span2">
@@ -294,6 +319,29 @@ export default function GenAIWizard({
                 <textarea className="input" rows={5} value={plan.instructions} onChange={(e) => set({ instructions: e.target.value })} />
               </label>
             )}
+            <div className="span2">
+              <details className="policy-preview">
+                <summary>View global text policy applied to this generation</summary>
+                <pre className="policy-text">{globalPolicy || "Loading…"}</pre>
+              </details>
+            </div>
+            {!dataset ? (
+              <label className="span2">
+                Dataset-specific policy additions (optional)
+                <textarea
+                  className="input"
+                  rows={4}
+                  value={plan.text_policy}
+                  placeholder="Add terminology, pronunciation, casing, or prohibited-content rules."
+                  onChange={(event) => set({ text_policy: event.target.value })}
+                />
+              </label>
+            ) : plan.text_policy ? (
+              <div className="span2 banner info small">
+                <b>Dataset policy additions:</b>
+                <pre className="guide-text">{plan.text_policy}</pre>
+              </div>
+            ) : null}
             <label>
               Generate now (first batch)
               <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Math.max(1, Number(e.target.value) || 1)) })} />
@@ -350,11 +398,12 @@ export default function GenAIWizard({
                     }}
                   />
                   <div className="grow">
-                    <div className="arabic" dir="rtl">{c.computed.display_text}</div>
+                    <div className="arabic" dir="auto">{c.computed.display_text}</div>
                     {c.computed.training_text !== c.computed.display_text && (
-                      <div className="arabic muted small" dir="rtl">{c.computed.training_text}</div>
+                      <div className="arabic muted small" dir="auto">{c.computed.training_text}</div>
                     )}
                     <div className="row gap wrap" style={{ marginTop: 4 }}>
+                      <Chip tone="accent">{c.computed.language}</Chip>
                       <Chip tone="accent">{c.computed.style}</Chip>
                       <Chip>{c.computed.domain}</Chip>
                       <Chip>{c.computed.length_bucket}</Chip>

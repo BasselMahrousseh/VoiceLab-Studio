@@ -1,12 +1,14 @@
-# Arabic & Emirati Text Policy (v1)
+# Multilingual Voice Text Policy (v2)
 
-This policy governs every transcript in the dataset. It is enforced partly by
+This global policy governs every transcript across Arabic, English, and
+code-switched datasets. Administrators can edit the effective policy from
+**Settings → Text policy** and add narrower rules on each dataset. It is enforced partly by
 automated validation (see `backend/app/services/llm_scripts.py`) and partly by
-reviewer discipline. Items marked **[decision]** are defaults chosen for v1 —
+reviewer discipline. Items marked **[decision]** are defaults chosen for v2 —
 revisit them before large-scale recording if the target TTS framework demands
 otherwise.
 
-## 1. Dialect preservation (non-negotiable)
+## 1. Language and dialect preservation (non-negotiable)
 
 - Emirati wording is written **exactly as it is spoken**. It is never rewritten
   into Modern Standard Arabic for the training transcript.
@@ -14,6 +16,22 @@ otherwise.
   - ❌ `ماذا تريد أن أفعل لك؟`
 - An MSA equivalent may be stored in `msa_equivalent` as supplementary
   metadata. It is never exported as the audio-paired text.
+- English wording is stored as natural English and is never translated into
+  Arabic for the training transcript.
+- A sentence that intentionally contains spoken Arabic and English is tagged
+  `language=mixed`; do not use `mixed` merely because a product name appears.
+
+### Required per-sentence language tag
+
+Every script and exported metadata row must carry exactly one language tag:
+
+| Tag | Use |
+|---|---|
+| `ar-AE` | Arabic utterance, including Emirati or MSA |
+| `en-US` | English utterance |
+| `mixed` | Intentionally code-switched Arabic and English utterance |
+
+Dialect remains separate: `emirati`, `msa`, `english`, or `mixed`.
 
 ## 2. Two text layers per script
 
@@ -43,15 +61,15 @@ If the script has no digits or special symbols, the two are identical.
 ## 5. Numbers, dates, times, prices, codes **[decision]**
 
 - `display_text`: digits are fine (`24 ساعة`, `99 درهم`, `الساعة 5:30`).
-- `training_text`: numbers are written **as the Arabic words the speaker will
-  say**, in the dialect's natural reading: `أربعة وعشرين ساعة`,
-  `تسعة وتسعين درهم`.
+- `training_text`: numbers are written **as words in the language the speaker
+  will use**: `أربعة وعشرين ساعة`, `تسعة وتسعين درهم`, or
+  `twenty four hours`.
 - Phone numbers / OTP codes read digit-by-digit are written digit-by-digit as
   words: `صفر خمسة صفر …`.
 - The recording UI shows both layers so the speaker reads numbers consistently
   with the training text.
 
-## 6. English words & code-switching **[decision]**
+## 6. English and code-switching **[decision]**
 
 - English words spoken as English are kept in Latin script in both layers:
   `فعّلت باقة الـ data روماً جديدة` — do not transliterate to Arabic script.
@@ -59,6 +77,10 @@ If the script has no digits or special symbols, the two are identical.
   `VAT`); the speaker reads them the way customers actually say them.
 - Rationale: keeps a single consistent convention the TTS tokenizer can learn;
   revisit if the chosen model's tokenizer cannot handle Latin script.
+- Pure English sentences use `language=en-US` and `dialect=english`.
+- Arabic sentences containing a Latin-script brand name remain `ar-AE` unless
+  the speaker actually switches language. True bilingual utterances use
+  `language=mixed`, `dialect=mixed`, and the `code_switch` tag.
 
 ## 7. Brand names & telecom terminology **[decision]**
 

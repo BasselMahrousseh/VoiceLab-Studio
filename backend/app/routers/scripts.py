@@ -19,8 +19,19 @@ from ..schemas import (
 )
 from ..services import llm_scripts
 from ..services import text_normalize as tn
+from ..services import text_policy
 
 router = APIRouter(prefix="/scripts", tags=["scripts"])
+
+
+def _generation_params(params: GenerateParams, db: Session) -> dict:
+    data = params.model_dump()
+    additions = data.get("policy_text", "").strip()
+    policy = text_policy.get_policy(db)
+    if additions:
+        policy += "\n\n## Dataset-specific additions\n\n" + additions
+    data["policy_text"] = policy
+    return data
 
 
 def _script_out(db: Session, s: Script) -> ScriptOut:
@@ -41,6 +52,7 @@ def create_scripts_from_items(
     generation_batch: str | None = None,
     generation_model: str | None = None,
     allow_warnings: bool = True,
+    allowed_languages: set[str] | None = None,
 ) -> tuple[list[Script], list[dict]]:
     """Validate and persist a batch of script items. Shared by the /scripts
     import endpoint and dataset creation. Returns (imported, skipped)."""
@@ -52,6 +64,11 @@ def create_scripts_from_items(
     skipped: list[dict] = []
     for item in items:
         v = llm_scripts.validate_item(item, existing_hashes, existing_texts, batch_hashes)
+        if allowed_languages and v["computed"]["language"] not in allowed_languages:
+            v["ok"] = False
+            v["errors"].append(
+                f"language '{v['computed']['language']}' is not enabled for this dataset"
+            )
         if not v["ok"] or (v["warnings"] and not allow_warnings):
             skipped.append(
                 {
@@ -68,7 +85,7 @@ def create_scripts_from_items(
             display_text=c["display_text"],
             training_text=c["training_text"],
             msa_equivalent=c["msa_equivalent"],
-            language=settings.default_language,
+            language=c["language"],
             dialect=c["dialect"],
             style=c["style"],
             domain=c["domain"],
@@ -98,6 +115,7 @@ def list_scripts(
     style: str | None = None,
     domain: str | None = None,
     dialect: str | None = None,
+    language: str | None = None,
     dataset_id: int | None = None,
     search: str | None = None,
     active: bool | None = None,
@@ -114,6 +132,8 @@ def list_scripts(
         q = q.filter(Script.domain == domain)
     if dialect:
         q = q.filter(Script.dialect == dialect)
+    if language:
+        q = q.filter(Script.language == language)
     if dataset_id is not None:
         q = q.filter(Script.dataset_id == dataset_id)
     if active is not None:
@@ -151,6 +171,7 @@ def script_stats(db: Session = Depends(get_db)):
         "by_style": group(Script.style),
         "by_domain": group(Script.domain),
         "by_dialect": group(Script.dialect),
+        "by_language": group(Script.language),
         "by_length": group(Script.length_bucket),
         "accepted_recordings": accepted[0],
         "accepted_duration_sec": round(accepted[1], 1),
@@ -162,6 +183,7 @@ def next_script(
     exclude_id: int | None = None,
     style: str | None = None,
     domain: str | None = None,
+    dataset_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(Script).filter(
@@ -173,6 +195,8 @@ def next_script(
         q = q.filter(Script.style == style)
     if domain:
         q = q.filter(Script.domain == domain)
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
     # 'new' scripts first (cover unrecorded content), then re-record leftovers
     s = (
         q.filter(Script.status == "new").order_by(Script.priority, Script.id).first()
@@ -182,12 +206,13 @@ def next_script(
 
 
 @router.get("/queue-count")
-def queue_count(db: Session = Depends(get_db)):
-    remaining = (
-        db.query(func.count(Script.id))
-        .filter(Script.active.is_(True), Script.status.in_(["new", "recorded"]))
-        .scalar()
+def queue_count(dataset_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(func.count(Script.id)).filter(
+        Script.active.is_(True), Script.status.in_(["new", "recorded"])
     )
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
+    remaining = q.scalar()
     return {"remaining": remaining}
 
 
@@ -230,7 +255,7 @@ def generate(
             "AZURE_OPENAI_API_KEY and LLM_DEPLOYMENT in .env",
         )
     try:
-        items = llm_scripts.generate_scripts(params.model_dump(), settings)
+        items = llm_scripts.generate_scripts(_generation_params(params, db), settings)
     except Exception as exc:
         raise HTTPException(502, f"LLM generation failed: {type(exc).__name__}: {exc}")
 
@@ -284,7 +309,7 @@ def generate_stream(
         min(batch_size, requested - offset)
         for offset in range(0, requested, batch_size)
     ]
-    base_params = params.model_dump()
+    base_params = _generation_params(params, db)
 
     def line(event: dict) -> str:
         return json.dumps(event, ensure_ascii=False) + "\n"

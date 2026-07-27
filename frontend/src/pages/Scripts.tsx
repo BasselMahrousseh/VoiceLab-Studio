@@ -1,18 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, patch, post } from "../api";
 import { Chip, Modal, MultiSelect, Spinner } from "../components/widgets";
-import { AppStatus, GenerateCandidate, Script, ScriptStats } from "../types";
+import { AppStatus, Dataset, GenerateCandidate, Script, ScriptStats } from "../types";
 
 const PAGE = 25;
 
 export default function Scripts({ status }: { status: AppStatus | null }) {
   const [stats, setStats] = useState<ScriptStats | null>(null);
   const [items, setItems] = useState<Script[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [filters, setFilters] = useState({ status: "", style: "", domain: "", search: "" });
-  const [genOpen, setGenOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
+  const [filters, setFilters] = useState({
+    dataset_id: "",
+    language: "",
+    status: "",
+    style: "",
+    domain: "",
+    search: "",
+  });
   const [edit, setEdit] = useState<Script | null>(null);
   const [error, setError] = useState("");
 
@@ -34,23 +40,22 @@ export default function Scripts({ status }: { status: AppStatus | null }) {
   }, [filters, page]);
 
   useEffect(load, [load]);
+  useEffect(() => {
+    get<Dataset[]>("/api/datasets").then(setDatasets).catch((e) => setError(e.message));
+  }, []);
+
+  const datasetName = (id: number | null) =>
+    datasets.find((dataset) => dataset.id === id)?.name || "Legacy / unassigned";
 
   return (
     <div className="page">
       <div className="row spread page-head">
-        <h1>Script bank</h1>
-        <div className="row gap">
-          <button className="btn ghost" onClick={() => setImportOpen(true)}>
-            ⬆ Import
-          </button>
-          <button
-            className="btn accent"
-            onClick={() => setGenOpen(true)}
-            disabled={!status?.llm_configured}
-            title={status?.llm_configured ? "" : "Configure the LLM endpoint in .env first"}
-          >
-            ✨ Generate with LLM
-          </button>
+        <div>
+          <h1>Script library</h1>
+          <p className="muted small">
+            Search, audit and edit utterances across datasets. Add or generate scripts from the
+            owning dataset so policy, languages and recorder assignments stay attached.
+          </p>
         </div>
       </div>
       {error && <div className="banner error">{error}</div>}
@@ -66,11 +71,24 @@ export default function Scripts({ status }: { status: AppStatus | null }) {
             value={`${Math.round(stats.accepted_duration_sec / 60)} min`}
           />
           <BarCard label="By style" data={stats.by_style} />
+          <BarCard label="By language" data={stats.by_language} />
           <BarCard label="By length" data={stats.by_length} />
         </div>
       )}
 
       <div className="row gap filter-bar">
+        <select className="input" value={filters.dataset_id} onChange={(e) => { setFilters({ ...filters, dataset_id: e.target.value }); setPage(0); }}>
+          <option value="">All datasets</option>
+          {datasets.map((dataset) => (
+            <option key={dataset.id} value={dataset.id}>{dataset.name}</option>
+          ))}
+        </select>
+        <select className="input" value={filters.language} onChange={(e) => { setFilters({ ...filters, language: e.target.value }); setPage(0); }}>
+          <option value="">All languages</option>
+          {(status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]).map((language) => (
+            <option key={language} value={language}>{language}</option>
+          ))}
+        </select>
         <select className="input" value={filters.status} onChange={(e) => { setFilters({ ...filters, status: e.target.value }); setPage(0); }}>
           <option value="">All statuses</option>
           {["new", "recorded", "done", "flagged", "retired"].map((s) => (
@@ -101,7 +119,9 @@ export default function Scripts({ status }: { status: AppStatus | null }) {
         <thead>
           <tr>
             <th>ID</th>
+            <th>Dataset</th>
             <th className="grow">Text</th>
+            <th>Language</th>
             <th>Style</th>
             <th>Domain</th>
             <th>Len</th>
@@ -113,7 +133,9 @@ export default function Scripts({ status }: { status: AppStatus | null }) {
           {items.map((s) => (
             <tr key={s.id} onClick={() => setEdit(s)} className="clickable">
               <td className="mono small">{s.script_id}</td>
-              <td className="arabic cell-text" dir="rtl">{s.display_text}</td>
+              <td className="small">{datasetName(s.dataset_id)}</td>
+              <td className="arabic cell-text" dir="auto">{s.display_text}</td>
+              <td><Chip tone="accent">{s.language}</Chip></td>
               <td>{s.style}</td>
               <td>{s.domain}</td>
               <td>{s.length_bucket}</td>
@@ -130,15 +152,13 @@ export default function Scripts({ status }: { status: AppStatus | null }) {
           ← Prev
         </button>
         <span className="muted small">
-          {page * PAGE + 1}–{Math.min((page + 1) * PAGE, total)} of {total}
+          {total ? page * PAGE + 1 : 0}–{Math.min((page + 1) * PAGE, total)} of {total}
         </span>
         <button className="btn ghost small" disabled={(page + 1) * PAGE >= total} onClick={() => setPage(page + 1)}>
           Next →
         </button>
       </div>
 
-      {genOpen && <GenerateModal status={status} onClose={() => setGenOpen(false)} onImported={load} />}
-      {importOpen && <ImportModal status={status} onClose={() => setImportOpen(false)} onImported={load} />}
       {edit && <EditModal script={edit} styles={styles} domains={domains} onClose={() => setEdit(null)} onSaved={load} />}
     </div>
   );
@@ -488,8 +508,11 @@ function EditModal({
     display_text: script.display_text,
     training_text: script.training_text,
     msa_equivalent: script.msa_equivalent ?? "",
+    language: script.language,
+    dialect: script.dialect,
     style: script.style,
     domain: script.domain,
+    tags: (script.tags || []).join(", "),
     notes: script.notes,
     status: script.status,
     active: script.active,
@@ -501,6 +524,7 @@ function EditModal({
       await patch(`/api/scripts/${script.id}`, {
         ...form,
         msa_equivalent: form.msa_equivalent || null,
+        tags: form.tags.split(",").map((tag) => tag.trim()).filter(Boolean),
       });
       onSaved();
       onClose();
@@ -514,11 +538,31 @@ function EditModal({
       <div className="form-grid">
         <label className="span2">
           Display text (what the speaker reads)
-          <textarea className="input arabic" dir="rtl" rows={2} value={form.display_text} onChange={(e) => setForm({ ...form, display_text: e.target.value })} />
+          <textarea className="input arabic" dir="auto" rows={2} value={form.display_text} onChange={(e) => setForm({ ...form, display_text: e.target.value })} />
         </label>
         <label className="span2">
           Training text (exact verbalization — numbers as words)
-          <textarea className="input arabic" dir="rtl" rows={2} value={form.training_text} onChange={(e) => setForm({ ...form, training_text: e.target.value })} />
+          <textarea className="input arabic" dir="auto" rows={2} value={form.training_text} onChange={(e) => setForm({ ...form, training_text: e.target.value })} />
+        </label>
+        <label>
+          Language
+          <select className="input" value={form.language} onChange={(e) => setForm({ ...form, language: e.target.value })}>
+            {["ar-AE", "en-US", "mixed"].map((language) => (
+              <option key={language}>{language}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Dialect
+          <select className="input" value={form.dialect} onChange={(e) => setForm({ ...form, dialect: e.target.value })}>
+            {["emirati", "msa", "mixed", "english"].map((dialect) => (
+              <option key={dialect}>{dialect}</option>
+            ))}
+          </select>
+        </label>
+        <label className="span2">
+          Tags (comma-separated)
+          <input className="input" value={form.tags} onChange={(e) => setForm({ ...form, tags: e.target.value })} />
         </label>
         <label className="span2">
           MSA equivalent (metadata only, optional)

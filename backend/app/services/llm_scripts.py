@@ -1,4 +1,4 @@
-"""LLM-based script generation with Arabic/Emirati governance validation.
+"""LLM-based multilingual script generation with governance validation.
 
 Flow: generate → validate (charset, duplicates, policy rules) → human previews
 flagged items in the UI → selected items are imported into the script bank.
@@ -12,26 +12,32 @@ import re
 from rapidfuzz import fuzz
 
 from ..config import Settings
-from ..models import DIALECTS, DOMAINS, STYLES
+from ..models import DIALECTS, DOMAINS, LANGUAGES, STYLES
 from . import text_normalize as tn
 
-SYSTEM_PROMPT = """أنت كاتب نصوص محترف متخصص باللهجة الإماراتية، تجهّز جمل تسجيل لبناء داتاسيت صوتي إماراتي عالي الجودة (لتدريب نموذج تحويل نص إلى كلام). متحدث واحد سيقرأ كل جملة بصوت طبيعي.
+SYSTEM_PROMPT = """You are a professional voice-dataset script writer. Create natural,
+recordable utterances for high-quality speech model training. The requested
+dataset may contain Arabic, English, or intentionally code-switched sentences.
 
-قواعد إلزامية:
+قواعد إلزامية / mandatory rules:
 1. اكتب باللهجة الإماراتية الأصيلة (أبوظبي/دبي/الشارقة) عندما يكون المطلوب "emirati": استخدم مفردات مثل: شو، وايد، عيل، تبا/تبغي، جذي، الحين، يالس، شحالك، مب، عسب، يوم (بمعنى لما)... تجنّب مفردات لهجات أخرى (مصرية، شامية، سعودية نجدية) إلا إذا طُلبت.
 2. لا تحوّل الجمل الإماراتية إلى فصحى. النص يُكتب كما يُنطق تماماً.
-3. بدون تشكيل (إلا إذا لزم لتوضيح لبس نادر).
+3. English sentences must sound natural to a fluent speaker. Do not translate
+   an English request into Arabic or an Arabic request into English.
 4. الجمل يجب أن تكون طبيعية وقابلة للقراءة بنفس واحد، مناسبة للتسجيل الصوتي.
 5. لكل جملة أعطِ حقلين للنص:
    - display_text: ما يُعرض على القارئ (يمكن أن يحتوي أرقاماً مثل 24 أو كلمات إنجليزية مثل SIM).
-   - training_text: النطق الحرفي الكامل — الأرقام تُكتب كلمات عربية كما ستُنطق باللهجة (مثال: "24" تصبح "أربعة وعشرين")، والكلمات الإنجليزية تبقى بالحروف اللاتينية كما ستُنطق. إذا لم يكن هناك أرقام أو رموز، يكون training_text مطابقاً لـ display_text.
+   - training_text: exact spoken form. Write numbers as words in the sentence's
+     spoken language. If no verbalization change is needed, copy display_text.
 6. عند طلب code-switching: ادمج كلمات إنجليزية شائعة في كلام الإماراتيين (باقة، داتا، نت، رصيد مع: package, data, roaming, offer, app, SIM, upgrade...) بشكل طبيعي غير متكلف.
-7. msa_equivalent: أضف المعادل بالفصحى فقط إذا كانت الجملة لهجة (اختياري، للميتاداتا وليس للتدريب).
-8. نوّع طول الجمل حسب المطلوب: short (2-5 كلمات)، medium (6-14 كلمة)، long (15-25 كلمة).
+7. Set language on every item: "ar-AE" for Arabic, "en-US" for English, or
+   "mixed" only when both languages are intentionally spoken in one sentence.
+8. Set dialect to "emirati"/"msa" for Arabic, "english" for English, and
+   "mixed" for a code-switched sentence.
 9. لا تكرر الصيغ ولا القوالب. كل جملة مختلفة فعلاً في التركيب والموضوع.
 
 أعد النتيجة بصيغة JSON فقط بدون أي نص آخر:
-{"items": [{"display_text": "...", "training_text": "...", "msa_equivalent": null, "style": "...", "domain": "...", "dialect": "...", "tags": ["..."], "note": ""}]}
+{"items": [{"display_text": "...", "training_text": "...", "msa_equivalent": null, "language": "ar-AE", "style": "...", "domain": "...", "dialect": "...", "tags": ["..."], "note": ""}]}
 """
 
 COVERAGE_HINTS = {
@@ -48,6 +54,7 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
     count = int(params.get("count", 20))
     styles = params.get("styles") or ["neutral", "friendly"]
     domains = params.get("domains") or ["customer_support"]
+    languages = params.get("languages") or ["ar-AE"]
     dialect = params.get("dialect") or "emirati"
     lengths = params.get("length_mix") or ["short", "medium", "long"]
     coverage = params.get("coverage") or []
@@ -58,6 +65,7 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
         f"أنشئ {count} جملة.",
         f"الأساليب المطلوبة (وزّع عليها): {', '.join(styles)}",
         f"المجالات: {', '.join(domains)}",
+        f"Languages (distribute across exactly these): {', '.join(languages)}",
         f"اللهجة: {dialect}"
         + (" (مزيج طبيعي بين الإماراتية والفصحى)" if dialect == "mixed" else ""),
         f"أطوال الجمل (وزّع): {', '.join(lengths)}",
@@ -77,7 +85,10 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
         lines.append(f"أسماء العلامات/المصطلحات المسموح استخدامها: {brands}")
     if topics:
         lines.append(f"مواضيع أو سيناريوهات مقترحة: {topics}")
-    lines.append("تذكّر: JSON فقط بالصيغة المحددة، والأرقام في training_text تُكتب كلمات.")
+    lines.append(
+        "Return JSON only. Tag every item with language. Numbers in training_text "
+        "must be written as spoken words in that item's language."
+    )
     return "\n".join(lines)
 
 
@@ -179,8 +190,15 @@ def _generate_via_chat(client, settings: Settings, messages: list[dict]) -> str:
 
 def generate_scripts(params: dict, settings: Settings) -> list[dict]:
     """Call the configured LLM deployment and return raw generated items."""
+    policy = (params.get("policy_text") or "").strip()
+    system_prompt = SYSTEM_PROMPT
+    if policy:
+        system_prompt += (
+            "\n\nThe following administrator-authored text policy is mandatory. "
+            "Follow it in addition to the structural rules above:\n\n" + policy
+        )
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": build_user_prompt(params, settings)},
     ]
     count = int(params.get("count", 20))
@@ -220,6 +238,20 @@ _ALLOWED_RE = re.compile(
 NEAR_DUP_THRESHOLD = 92  # rapidfuzz token_sort_ratio
 
 
+def detect_language(text: str) -> str:
+    has_arabic = bool(re.search(r"[\u0600-\u06ff]", text))
+    has_latin = tn.has_latin(text)
+    if has_arabic and has_latin:
+        latin_tokens = {token.lower() for token in re.findall(r"[A-Za-z]+", text)}
+        brand_or_acronym_tokens = {"e", "du", "elife", "sim", "vat", "wifi", "sms", "otp"}
+        if latin_tokens and latin_tokens.issubset(brand_or_acronym_tokens):
+            return "ar-AE"
+        return "mixed"
+    if has_latin:
+        return "en-US"
+    return "ar-AE"
+
+
 def validate_item(
     item: dict,
     existing_hashes: set[str],
@@ -232,6 +264,12 @@ def validate_item(
 
     display = (item.get("display_text") or "").strip()
     training = (item.get("training_text") or display).strip()
+    requested_language = (item.get("language") or "auto").strip()
+    language = (
+        detect_language(training or display)
+        if requested_language == "auto" or requested_language not in LANGUAGES
+        else requested_language
+    )
 
     if not display:
         errors.append("empty display_text")
@@ -244,7 +282,7 @@ def validate_item(
         bad = set(_ALLOWED_RE.findall(display + " " + training))
         if bad:
             errors.append(f"disallowed characters: {' '.join(sorted(bad))}")
-        if tn.arabic_ratio(training) < 0.5 and "code_switch" not in (item.get("tags") or []):
+        if language == "ar-AE" and tn.arabic_ratio(training) < 0.5:
             warnings.append("less than half the text is Arabic - check dialect/code-switch tag")
 
         h = tn.normalized_hash(training)
@@ -263,6 +301,10 @@ def validate_item(
     style = (item.get("style") or "neutral").strip().lower()
     domain = (item.get("domain") or "general").strip().lower()
     dialect = (item.get("dialect") or "emirati").strip().lower()
+    if language == "en-US":
+        dialect = "english"
+    elif language == "mixed":
+        dialect = "mixed"
     if style not in STYLES:
         warnings.append(f"unknown style '{style}'")
     if domain not in DOMAINS:
@@ -270,11 +312,14 @@ def validate_item(
     if dialect not in DIALECTS:
         warnings.append(f"unknown dialect '{dialect}'")
 
-    tags = item.get("tags") or []
-    if tn.has_latin(training) and "code_switch" not in tags:
+    tags = list(item.get("tags") or [])
+    if language == "mixed" and "code_switch" not in tags:
         tags = [*tags, "code_switch"]
     if tn.has_digits(display) and "numbers" not in tags:
         tags = [*tags, "numbers"]
+    language_tag = f"language:{language}"
+    if language_tag not in tags:
+        tags = [*tags, language_tag]
 
     return {
         "ok": not errors,
@@ -284,6 +329,7 @@ def validate_item(
             "display_text": display,
             "training_text": training,
             "msa_equivalent": (item.get("msa_equivalent") or None),
+            "language": language,
             "style": style,
             "domain": domain,
             "dialect": dialect,

@@ -50,7 +50,9 @@ def _client(settings: Settings):
     )
 
 
-def transcribe(wav_source: Path | bytes, settings: Settings) -> str:
+def transcribe(
+    wav_source: Path | bytes, settings: Settings, language: str | None = None
+) -> str:
     client = _client(settings)
     if isinstance(wav_source, bytes):
         f = io.BytesIO(wav_source)
@@ -60,12 +62,17 @@ def transcribe(wav_source: Path | bytes, settings: Settings) -> str:
         f = open(wav_source, "rb")
         close = f.close
     try:
+        kwargs = {
+            "model": settings.asr_deployment,
+            "file": f,
+            "response_format": "json",
+            "temperature": 0.0,
+        }
+        detected_language = settings.asr_language if language is None else language
+        if detected_language:
+            kwargs["language"] = detected_language
         result = client.audio.transcriptions.create(
-            model=settings.asr_deployment,
-            file=f,
-            language=settings.asr_language,
-            response_format="json",
-            temperature=0.0,
+            **kwargs
         )
     finally:
         close()
@@ -73,7 +80,10 @@ def transcribe(wav_source: Path | bytes, settings: Settings) -> str:
 
 
 def verify_against_script(
-    wav_source: Path | bytes, script_text: str, settings: Settings
+    wav_source: Path | bytes,
+    script_text: str,
+    settings: Settings,
+    language: str | None = None,
 ) -> dict:
     """Transcribe and score against the intended transcript.
 
@@ -81,7 +91,7 @@ def verify_against_script(
     match / minor_mismatch / major_mismatch / error.
     """
     try:
-        asr_text = transcribe(wav_source, settings)
+        asr_text = transcribe(wav_source, settings, language)
     except Exception as exc:  # endpoint/config errors surface to the reviewer
         return {
             "status": "error",

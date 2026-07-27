@@ -767,6 +767,14 @@ body.modal-open {
 .form-grid .span2 {
   grid-column: span 2;
 }
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 10px 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
 .multi-select {
   display: flex;
   flex-wrap: wrap;
@@ -832,6 +840,32 @@ body.modal-open {
   font-size: 13px;
   line-height: 1.6;
   margin: 0;
+}
+.policy-editor {
+  min-height: 420px;
+  resize: vertical;
+  white-space: pre-wrap;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.policy-preview {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel-2);
+}
+.policy-preview summary {
+  padding: 9px 12px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.policy-preview .policy-text {
+  max-height: 280px;
+  padding: 12px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
 }
 .spinner-wrap {
   display: inline-flex;

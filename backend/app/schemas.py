@@ -70,7 +70,9 @@ class DatasetOut(ORMModel):
     description: str
     instructions: str
     language: str
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str
+    text_policy: str = ""
     status: str
     target_sample_count: int = 0
     target_avg_duration_sec: float = 0.0
@@ -87,6 +89,8 @@ class DatasetCreate(BaseModel):
     instructions: str = ""
     dialect: str = "emirati"
     language: str = "ar-AE"
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
+    text_policy: str = ""
     target_sample_count: int = 0
     target_avg_duration_sec: float = 0.0
 
@@ -95,7 +99,9 @@ class DatasetPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
+    languages: list[str] | None = None
     dialect: str | None = None
+    text_policy: str | None = None
     status: str | None = None
     target_sample_count: int | None = None
     target_avg_duration_sec: float | None = None
@@ -108,6 +114,7 @@ class AddScriptsIn(BaseModel):
     style: str = "neutral"
     domain: str = "general"
     dialect: str = "emirati"
+    language: str = "auto"
     allow_warnings: bool = True
 
 
@@ -177,6 +184,7 @@ class ScriptItemIn(BaseModel):
     display_text: str
     training_text: str | None = None
     msa_equivalent: str | None = None
+    language: str = "auto"
     dialect: str = "emirati"
     style: str = "neutral"
     domain: str = "general"
@@ -197,6 +205,7 @@ class ScriptPatch(BaseModel):
     display_text: str | None = None
     training_text: str | None = None
     msa_equivalent: str | None = None
+    language: str | None = None
     dialect: str | None = None
     style: str | None = None
     domain: str | None = None
@@ -211,12 +220,14 @@ class GenerateParams(BaseModel):
     count: int = Field(default=20, ge=1, le=100)
     styles: list[str] = Field(default_factory=lambda: ["neutral", "friendly"])
     domains: list[str] = Field(default_factory=lambda: ["customer_support"])
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str = "emirati"
     length_mix: list[str] = Field(default_factory=lambda: ["short", "medium", "long"])
     coverage: list[str] = Field(default_factory=list)
     topics: str = ""
     brand_terms: str = ""
     batch_name: str = ""
+    policy_text: str = ""
     # Target average spoken duration per clip (seconds); steers sentence length.
     avg_duration_sec: float = Field(default=0.0, ge=0, le=60)
 
@@ -267,6 +278,7 @@ class RejectIn(BaseModel):
 # --- exports -------------------------------------------------------------------
 class ExportParams(BaseModel):
     name: str = ""
+    dataset_id: int | None = None
     sample_rate: int | None = None
     trim_silence: bool = True
     normalize: str = "none"  # none | peak | loudness
@@ -276,6 +288,10 @@ class ExportParams(BaseModel):
     styles: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
     make_zip: bool = True
+
+
+class PolicyUpdate(BaseModel):
+    text: str = Field(min_length=1, max_length=50000)
 
 
 class ExportOut(ORMModel):

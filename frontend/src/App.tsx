@@ -62,7 +62,7 @@ function AdminShell() {
           <NavLink to="/datasets">📁 Datasets</NavLink>
           <NavLink to="/team">👥 Team</NavLink>
           <NavLink to="/studio">🎙️ Studio</NavLink>
-          <NavLink to="/scripts">📜 Scripts</NavLink>
+          <NavLink to="/scripts">📜 Script library</NavLink>
           <NavLink to="/review">🧪 Review</NavLink>
           <NavLink to="/export">📦 Export</NavLink>
           <NavLink to="/settings">⚙️ Settings</NavLink>

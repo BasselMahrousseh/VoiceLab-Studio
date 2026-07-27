@@ -114,6 +114,7 @@ def list_recordings(
     qc_status: str | None = None,
     asr_status: str | None = None,
     script_pk: int | None = None,
+    dataset_id: int | None = None,
     session_id: int | None = None,
     needs_review: bool = False,
     limit: int = 50,
@@ -129,6 +130,10 @@ def list_recordings(
         q = q.filter(Recording.asr_status == asr_status)
     if script_pk:
         q = q.filter(Recording.script_pk == script_pk)
+    if dataset_id:
+        q = q.join(Script, Recording.script_pk == Script.id).filter(
+            Script.dataset_id == dataset_id
+        )
     if session_id:
         q = q.filter(Recording.session_id == session_id)
     if needs_review:
@@ -228,7 +233,12 @@ def verify_recording(
         wav = storage.read_master(settings, r.rel_path)
     except Exception as exc:
         raise HTTPException(404, f"Audio file unavailable: {exc}")
-    result = verify_against_script(wav, r.script.training_text, settings)
+    language = {"ar-AE": "ar", "en-US": "en", "mixed": ""}.get(
+        r.script.language, settings.asr_language
+    )
+    result = verify_against_script(
+        wav, r.script.training_text, settings, language=language
+    )
     r.asr_status = result["status"]
     r.asr_text = result["asr_text"]
     r.asr_cer = result["cer"]

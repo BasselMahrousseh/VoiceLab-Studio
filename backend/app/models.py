@@ -15,7 +15,8 @@ def utcnow() -> datetime:
 # in the API layer so new styles/domains can be added without migrations).
 # ---------------------------------------------------------------------------
 STYLES = ["neutral", "friendly", "formal", "apologetic", "explanatory", "energetic"]
-DIALECTS = ["emirati", "msa", "mixed"]
+DIALECTS = ["emirati", "msa", "mixed", "english"]
+LANGUAGES = ["ar-AE", "en-US", "mixed"]
 DOMAINS = [
     "customer_support",
     "telecom",
@@ -31,6 +32,18 @@ QC_STATUSES = ["passed", "warning", "failed"]
 HUMAN_STATUSES = ["pending", "accepted", "rejected"]
 ASR_STATUSES = ["not_run", "match", "minor_mismatch", "major_mismatch", "error"]
 ROLES = ["admin", "recorder"]
+
+
+class AppSetting(Base):
+    """Small database-backed settings that administrators edit in the UI."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class User(Base):
@@ -78,7 +91,12 @@ class Dataset(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     instructions: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(String(16), default="ar-AE")
+    # A dataset may intentionally contain Arabic, English and code-switched
+    # utterances. Every Script still carries its own exact language tag.
+    languages: Mapped[list] = mapped_column(JSON, default=lambda: ["ar-AE"])
     dialect: Mapped[str] = mapped_column(String(24), default="emirati")
+    # Dataset-specific additions layered on top of the global text policy.
+    text_policy: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | archived
     # Planning targets set by the data scientist (used for hour projections and
     # to steer GenAI sentence length; not hard limits).

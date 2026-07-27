@@ -61,6 +61,39 @@ def test_helpers():
     assert tn.length_bucket("شو تبغي") == "short"
 
 
+def test_language_tagging_for_arabic_english_and_mixed():
+    from app.services.llm_scripts import validate_item
+
+    existing_hashes: set[str] = set()
+    existing_texts: list[str] = []
+    batch_hashes: set[str] = set()
+
+    arabic = validate_item(
+        {"display_text": "مرحبا بكم في eLife", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+    english = validate_item(
+        {"display_text": "Welcome to our support team", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+    mixed = validate_item(
+        {"display_text": "أبغي أعمل upgrade للباقة", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+
+    assert (arabic["language"], arabic["dialect"]) == ("ar-AE", "emirati")
+    assert (english["language"], english["dialect"]) == ("en-US", "english")
+    assert (mixed["language"], mixed["dialect"]) == ("mixed", "mixed")
+    assert "language:en-US" in english["tags"]
+    assert {"language:mixed", "code_switch"}.issubset(mixed["tags"])
+
+
 # ---------------------------------------------------------------------------
 # audio QC
 # ---------------------------------------------------------------------------
@@ -287,6 +320,7 @@ def test_auth_and_recorder_flow():
         rec_client = TestClient(app)
         _login(rec_client, "reader1", "pass123")
         assert rec_client.get("/api/datasets").status_code == 403
+        assert rec_client.patch("/api/policy", json={"text": "not allowed"}).status_code == 403
 
         # recorder context: dataset, session and first script to read
         ctx = rec_client.get("/api/recorder/context").json()
@@ -328,6 +362,73 @@ def test_auth_and_recorder_flow():
         moved_ctx = rec_client.get("/api/recorder/context").json()
         assert moved_ctx["dataset"]["id"] == second_ds["id"]
         assert moved_ctx["progress"] == {"total": 1, "done": 0, "remaining": 1}
+
+        # exports are scoped to one dataset rather than mixing projects
+        scoped_export = client.post(
+            "/api/exports",
+            json={"name": "first-dataset-only", "dataset_id": ds["id"]},
+        ).json()
+        assert scoped_export["status"] == "done"
+        assert scoped_export["file_count"] == 1
+        assert scoped_export["stats"]["dataset_id"] == ds["id"]
+        assert scoped_export["stats"]["dataset_name"] == ds["name"]
+
+
+def test_editable_policy_and_multilingual_dataset():
+    with TestClient(app) as client:
+        _login(client)
+        original = client.get("/api/policy").json()["text"]
+        updated = original + "\n\n## Test addition\nUse the approved terminology list."
+        try:
+            saved = client.patch("/api/policy", json={"text": updated})
+            assert saved.status_code == 200
+            assert client.get("/api/policy").json()["text"] == updated
+
+            dataset = client.post(
+                "/api/datasets",
+                json={
+                    "name": "Arabic English Mixed Test",
+                    "languages": ["ar-AE", "en-US", "mixed"],
+                    "text_policy": "Keep service names in their official spelling.",
+                },
+            ).json()
+            assert dataset["languages"] == ["ar-AE", "en-US", "mixed"]
+            assert dataset["text_policy"].startswith("Keep service names")
+
+            added = client.post(
+                f"/api/datasets/{dataset['id']}/scripts",
+                json={
+                    "text": "مرحبا في مشروع التسجيل متعدد اللغات\nWelcome to the multilingual voice studio\nأبغي أسوي upgrade للحساب التجريبي",
+                    "language": "auto",
+                },
+            ).json()
+            assert added["imported"] == 3
+            scripts = client.get(
+                f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+            ).json()["items"]
+            assert {script["language"] for script in scripts} == {
+                "ar-AE",
+                "en-US",
+                "mixed",
+            }
+            cannot_remove_used_language = client.patch(
+                f"/api/datasets/{dataset['id']}",
+                json={"languages": ["ar-AE"]},
+            )
+            assert cannot_remove_used_language.status_code == 409
+
+            arabic_only = client.post(
+                "/api/datasets",
+                json={"name": "Arabic Only Language Guard", "languages": ["ar-AE"]},
+            ).json()
+            rejected_english = client.post(
+                f"/api/datasets/{arabic_only['id']}/scripts",
+                json={"text": "This sentence must not enter an Arabic-only dataset"},
+            ).json()
+            assert rejected_english["imported"] == 0
+            assert "not enabled" in rejected_english["skipped"][0]["errors"][0]
+        finally:
+            client.patch("/api/policy", json={"text": original})
 
 
 def test_generation_stream_emits_candidates_incrementally(monkeypatch):

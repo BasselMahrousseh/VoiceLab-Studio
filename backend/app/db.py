@@ -50,6 +50,8 @@ def _migrate_sqlite() -> None:
         "datasets": [
             ("target_sample_count", "INTEGER DEFAULT 0"),
             ("target_avg_duration_sec", "REAL DEFAULT 0"),
+            ("languages", "TEXT DEFAULT '[\"ar-AE\"]'"),
+            ("text_policy", "TEXT DEFAULT ''"),
         ],
     }
     with _engine.begin() as conn:
@@ -100,7 +102,7 @@ def _seed_defaults() -> None:
 _DEFAULT_INSTRUCTIONS = (
     "• Record in a quiet room with no echo, fans, or background voices.\n"
     "• Keep a steady hand-width distance from the microphone.\n"
-    "• Read the sentence exactly as shown, in natural Emirati dialect.\n"
+    "• Read the sentence exactly as shown, in its natural language and dialect.\n"
     "• Speak at a calm, even pace — don't rush the ends of sentences.\n"
     "• If you stumble or mispronounce, just press Restart and read it again.\n"
     "• Leave a short beat of silence before you start and after you finish."

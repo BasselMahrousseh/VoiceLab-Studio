@@ -43,7 +43,9 @@ export interface Dataset {
   description: string;
   instructions: string;
   language: string;
+  languages: string[];
   dialect: string;
+  text_policy: string;
   status: string;
   target_sample_count: number;
   target_avg_duration_sec: number;
@@ -144,7 +146,7 @@ export interface AppStatus {
   accepted_count: number;
   accepted_duration_sec: number;
   active_session_id: number | null;
-  enums: { styles: string[]; domains: string[]; dialects: string[] };
+  enums: { styles: string[]; domains: string[]; dialects: string[]; languages: string[] };
   export_sample_rate: number;
 }
 
@@ -153,6 +155,7 @@ export interface ScriptStats {
   by_status: Record<string, number>;
   by_style: Record<string, number>;
   by_domain: Record<string, number>;
+  by_language: Record<string, number>;
   by_dialect: Record<string, number>;
   by_length: Record<string, number>;
   accepted_recordings: number;
@@ -167,6 +170,7 @@ export interface GenerateCandidate {
     display_text: string;
     training_text: string;
     msa_equivalent: string | null;
+    language: string;
     style: string;
     domain: string;
     dialect: string;

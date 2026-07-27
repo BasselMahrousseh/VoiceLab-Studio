@@ -212,8 +212,11 @@ export default function Recorder() {
         ) : (
           <>
             <div className="panel prompt-panel fade-in" key={script.id}>
-              <div className="prompt-label muted small">Please read aloud</div>
-              <div className="arabic prompt-text" dir="rtl">
+              <div className="row spread">
+                <div className="prompt-label muted small">Please read aloud</div>
+                <span className="chip accent">{script.language}</span>
+              </div>
+              <div className="arabic prompt-text" dir="auto">
                 {script.display_text}
               </div>
               {script.notes && <div className="muted small note-line">📝 {script.notes}</div>}

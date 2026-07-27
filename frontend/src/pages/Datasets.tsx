@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { get, patch, post } from "../api";
-import { Modal, Spinner } from "../components/widgets";
+import { Modal, MultiSelect, Spinner } from "../components/widgets";
 import { AppStatus, Dataset, User } from "../types";
 import GenAIWizard from "./GenAIWizard";
 
@@ -13,7 +13,7 @@ function fmtHours(sec: number): string {
 
 const DEFAULT_INSTRUCTIONS = `• Record in a quiet room with no echo, fans, or background voices.
 • Keep a steady hand-width distance from the microphone.
-• Read the sentence exactly as shown, in natural Emirati dialect.
+• Read the sentence exactly as shown, in its natural language and dialect.
 • Speak at a calm, even pace — don't rush the ends of sentences.
 • If you stumble or mispronounce, just press Restart and read it again.
 • Leave a short beat of silence before you start and after you finish.`;
@@ -64,6 +64,11 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
                 <span className={`chip ${d.status === "active" ? "ok" : "off"}`}>{d.status}</span>
               </div>
               {d.description && <p className="muted small ds-desc">{d.description}</p>}
+              <div className="row gap wrap" style={{ marginBottom: 8 }}>
+                {(d.languages?.length ? d.languages : [d.language]).map((language) => (
+                  <span key={language} className="chip accent">{language}</span>
+                ))}
+              </div>
               <div className="progress-track thin">
                 <div className="progress-fill" style={{ width: `${pct}%` }} />
               </div>
@@ -131,13 +136,23 @@ function CreateDatasetModal({
     name: "",
     description: "",
     dialect: "emirati",
+    languages: ["ar-AE"] as string[],
+    text_policy: "",
     instructions: DEFAULT_INSTRUCTIONS,
   });
+  const [globalPolicy, setGlobalPolicy] = useState("");
   const [scripts, setScripts] = useState("");
+  const [scriptLanguage, setScriptLanguage] = useState("auto");
   const [style, setStyle] = useState("neutral");
   const [domain, setDomain] = useState("customer_support");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    get<{ text: string }>("/api/policy")
+      .then((response) => setGlobalPolicy(response.text))
+      .catch((e) => setError(e.message));
+  }, []);
 
   const create = async () => {
     if (!form.name.trim()) {
@@ -152,7 +167,7 @@ function CreateDatasetModal({
       if (lines.length) {
         const r = await post<{ imported: number; skipped: unknown[] }>(
           `/api/datasets/${ds.id}/scripts`,
-          { text: scripts, style, domain, dialect: form.dialect }
+          { text: scripts, style, domain, dialect: form.dialect, language: scriptLanguage }
         );
         if (r.skipped.length) {
           setError(`Created. Imported ${r.imported} scripts, ${r.skipped.length} skipped (policy issues).`);
@@ -180,12 +195,23 @@ function CreateDatasetModal({
           />
         </label>
         <label>
-          Dialect
+          Arabic dialect
           <select className="input" value={form.dialect} onChange={(e) => setForm({ ...form, dialect: e.target.value })}>
             {(status?.enums.dialects ?? ["emirati", "msa", "mixed"]).map((d) => (
               <option key={d}>{d}</option>
             ))}
           </select>
+        </label>
+        <label className="span2">
+          Languages allowed in this dataset
+          <MultiSelect
+            options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
+            value={form.languages}
+            onChange={(languages) => setForm({ ...form, languages })}
+          />
+          <span className="muted small">
+            Every sentence receives its own language tag. Use “mixed” for sentences that intentionally code-switch.
+          </span>
         </label>
         <label className="span2">
           Description (optional)
@@ -194,6 +220,23 @@ function CreateDatasetModal({
         <label className="span2">
           Recording instructions — shown to recorders before they record
           <textarea className="input" rows={6} value={form.instructions} onChange={(e) => setForm({ ...form, instructions: e.target.value })} />
+        </label>
+        <div className="span2">
+          <details className="policy-preview">
+            <summary>View global text policy used by every dataset</summary>
+            <pre className="policy-text">{globalPolicy || "Loading…"}</pre>
+          </details>
+        </div>
+        <label className="span2">
+          Additions for this dataset (optional)
+          <textarea
+            className="input"
+            rows={4}
+            placeholder="Add terminology, pronunciation, casing, prohibited content, or other rules specific to this dataset."
+            value={form.text_policy}
+            onChange={(event) => setForm({ ...form, text_policy: event.target.value })}
+          />
+          <span className="muted small">These rules are added after the global policy and passed to AI generation.</span>
         </label>
         <div className="span2 sub-head">Starter scripts (optional — you can add more later)</div>
         <label>
@@ -212,14 +255,23 @@ function CreateDatasetModal({
             ))}
           </select>
         </label>
+        <label>
+          Sentence language
+          <select className="input" value={scriptLanguage} onChange={(event) => setScriptLanguage(event.target.value)}>
+            <option value="auto">Auto-detect each sentence</option>
+            {(status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]).map((language) => (
+              <option key={language} value={language}>{language}</option>
+            ))}
+          </select>
+        </label>
         <label className="span2">
-          One sentence per line (Arabic)
-          <textarea className="input arabic" dir="rtl" rows={5} placeholder={"هلا شحالك اليوم؟\nشو تبغي أسويلك؟"} value={scripts} onChange={(e) => setScripts(e.target.value)} />
+          One sentence per line
+          <textarea className="input" dir="auto" rows={5} placeholder={"هلا شحالك اليوم؟\nHow can I help you today?"} value={scripts} onChange={(e) => setScripts(e.target.value)} />
         </label>
       </div>
       {error && <div className="banner warn">{error}</div>}
       <div className="row gap modal-actions">
-        <button className="btn accept" onClick={create} disabled={busy || !form.name.trim()}>
+        <button className="btn accept" onClick={create} disabled={busy || !form.name.trim() || !form.languages.length}>
           {busy ? <Spinner label="Creating…" /> : "Create dataset"}
         </button>
         <button className="btn ghost" onClick={onClose}>
@@ -245,12 +297,18 @@ function DatasetDetail({
   onGenerate: () => void;
 }) {
   const [instructions, setInstructions] = useState(dataset.instructions);
+  const [languages, setLanguages] = useState(
+    dataset.languages?.length ? dataset.languages : [dataset.language]
+  );
+  const [policyAdditions, setPolicyAdditions] = useState(dataset.text_policy || "");
+  const [globalPolicy, setGlobalPolicy] = useState("");
   const [recorders, setRecorders] = useState<User[]>([]);
   const [allRecorders, setAllRecorders] = useState<User[]>([]);
   const [assignId, setAssignId] = useState(0);
   const [scripts, setScripts] = useState("");
   const [style, setStyle] = useState("neutral");
   const [domain, setDomain] = useState("customer_support");
+  const [scriptLanguage, setScriptLanguage] = useState("auto");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -267,12 +325,21 @@ function DatasetDetail({
       .catch((e) => setError(e.message));
   }, [dataset.id]);
   useEffect(loadRecorders, [loadRecorders]);
+  useEffect(() => {
+    get<{ text: string }>("/api/policy")
+      .then((response) => setGlobalPolicy(response.text))
+      .catch((e) => setError(e.message));
+  }, []);
 
-  const saveInstructions = async () => {
+  const saveGuidance = async () => {
     setError("");
     try {
-      await patch(`/api/datasets/${dataset.id}`, { instructions });
-      setMsg("Instructions saved.");
+      await patch(`/api/datasets/${dataset.id}`, {
+        instructions,
+        languages,
+        text_policy: policyAdditions,
+      });
+      setMsg("Dataset guidance, languages and policy additions saved.");
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -290,7 +357,7 @@ function DatasetDetail({
     try {
       const r = await post<{ imported: number; skipped: unknown[] }>(
         `/api/datasets/${dataset.id}/scripts`,
-        { text: scripts, style, domain, dialect: dataset.dialect }
+        { text: scripts, style, domain, dialect: dataset.dialect, language: scriptLanguage }
       );
       setMsg(`Added ${r.imported} scripts (${r.skipped.length} skipped).`);
       setScripts("");
@@ -327,6 +394,9 @@ function DatasetDetail({
     <Modal title={dataset.name} onClose={onClose} wide>
       <div className="detail-stats row gap wrap">
         <span className="chip">{dataset.dialect}</span>
+        {(dataset.languages?.length ? dataset.languages : [dataset.language]).map((language) => (
+          <span key={language} className="chip accent">{language}</span>
+        ))}
         <span className="chip">📜 {dataset.script_count} scripts</span>
         <span className="chip ok">✓ {dataset.accepted_count} accepted · {fmtHours(dataset.accepted_duration_sec)}</span>
         <span className="chip">🎙️ {dataset.recorder_count} recorders</span>
@@ -343,9 +413,32 @@ function DatasetDetail({
 
       <h3 className="section-head">Recording instructions</h3>
       <textarea className="input" rows={6} value={instructions} onChange={(e) => setInstructions(e.target.value)} />
+      <h3 className="section-head">Languages & text policy</h3>
+      <label className="field-label">
+        Languages allowed in this dataset
+        <MultiSelect
+          options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
+          value={languages}
+          onChange={setLanguages}
+        />
+      </label>
+      <details className="policy-preview">
+        <summary>View effective global policy</summary>
+        <pre className="policy-text">{globalPolicy || "Loading…"}</pre>
+      </details>
+      <label className="field-label">
+        Dataset-specific policy additions
+        <textarea
+          className="input"
+          rows={4}
+          value={policyAdditions}
+          placeholder="Rules specific to this dataset"
+          onChange={(event) => setPolicyAdditions(event.target.value)}
+        />
+      </label>
       <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn accent small" onClick={saveInstructions}>
-          Save instructions
+        <button className="btn accent small" onClick={saveGuidance} disabled={!languages.length}>
+          Save dataset guidance
         </button>
       </div>
 
@@ -367,8 +460,14 @@ function DatasetDetail({
             <option key={s}>{s}</option>
           ))}
         </select>
+        <select className="input" value={scriptLanguage} onChange={(event) => setScriptLanguage(event.target.value)}>
+          <option value="auto">Auto-detect language</option>
+          {(languages.length ? languages : status?.enums.languages ?? ["ar-AE"]).map((language) => (
+            <option key={language} value={language}>{language}</option>
+          ))}
+        </select>
       </div>
-      <textarea className="input arabic" dir="rtl" rows={4} style={{ marginTop: 8 }} placeholder={"سطر لكل جملة…"} value={scripts} onChange={(e) => setScripts(e.target.value)} />
+      <textarea className="input" dir="auto" rows={4} style={{ marginTop: 8 }} placeholder={"سطر لكل جملة…\nOne sentence per line…"} value={scripts} onChange={(e) => setScripts(e.target.value)} />
       <div className="row" style={{ marginTop: 8 }}>
         <button className="btn accent small" onClick={addScripts} disabled={busy || !scripts.trim()}>
           {busy ? <Spinner label="Adding…" /> : "Add pasted scripts"}

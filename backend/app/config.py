@@ -37,8 +37,8 @@ class Settings(BaseSettings):
 
     # --- app ---
     app_name: str = "e& Lahja Studio"
-    app_version: str = "0.1.0"
-    dataset_version: str = "v1"
+    app_version: str = "0.2.0"
+    dataset_version: str = "v2"
     host: str = "127.0.0.1"
     port: int = 8000
 
