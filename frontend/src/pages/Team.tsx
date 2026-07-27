@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { get, patch, post } from "../api";
+import { get, patch, post, remove } from "../api";
 import { useAuth } from "../auth";
 import { Modal, Spinner } from "../components/widgets";
 import { Dataset, User } from "../types";
@@ -10,6 +10,7 @@ export default function Team() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [resetFor, setResetFor] = useState<User | null>(null);
+  const [deleteFor, setDeleteFor] = useState<User | null>(null);
   const [savingDatasetFor, setSavingDatasetFor] = useState<number | null>(null);
   const [error, setError] = useState("");
 
@@ -108,9 +109,14 @@ export default function Team() {
                     reset password
                   </button>
                   {u.id !== me?.id && (
-                    <button className="link-btn" onClick={() => toggleActive(u)}>
-                      {u.active ? "disable" : "enable"}
-                    </button>
+                    <>
+                      <button className="link-btn" onClick={() => toggleActive(u)}>
+                        {u.active ? "disable" : "enable"}
+                      </button>
+                      <button className="link-btn danger-link" onClick={() => setDeleteFor(u)}>
+                        delete
+                      </button>
+                    </>
                   )}
                 </div>
               </td>
@@ -123,6 +129,16 @@ export default function Team() {
         <AddUserModal datasets={datasets} onClose={() => setAddOpen(false)} onAdded={() => { load(); setAddOpen(false); }} />
       )}
       {resetFor && <ResetModal user={resetFor} onClose={() => setResetFor(null)} onDone={() => setResetFor(null)} />}
+      {deleteFor && (
+        <DeleteUserModal
+          user={deleteFor}
+          onClose={() => setDeleteFor(null)}
+          onDeleted={() => {
+            setDeleteFor(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -281,6 +297,64 @@ function ResetModal({ user, onClose, onDone }: { user: User; onClose: () => void
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+function DeleteUserModal({
+  user,
+  onClose,
+  onDeleted,
+}: {
+  user: User;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await remove(`/api/auth/users/${user.id}`);
+      onDeleted();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Delete user — ${user.username}`} onClose={onClose}>
+      <div className="banner error">
+        This permanently removes the login account. Historical speaker and recording identity is
+        preserved for dataset traceability.
+      </div>
+      <label className="field">
+        <span>
+          Type <b>{user.username}</b> to confirm
+        </span>
+        <input
+          className="input"
+          value={confirmation}
+          autoFocus
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+      </label>
+      {error && <div className="banner error">{error}</div>}
+      <div className="row gap modal-actions">
+        <button
+          className="btn danger"
+          disabled={busy || confirmation !== user.username}
+          onClick={submit}
+        >
+          {busy ? <Spinner label="Deleting…" /> : "Permanently delete user"}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+      </div>
     </Modal>
   );
 }

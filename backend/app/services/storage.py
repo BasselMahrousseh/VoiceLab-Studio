@@ -96,6 +96,38 @@ def read_master(settings: Settings, rel_path: str) -> bytes:
     return abs_audio_path(settings, rel_path).read_bytes()
 
 
+def delete_master(settings: Settings, rel_path: str) -> None:
+    """Delete one recording master from the configured storage backend.
+
+    Missing files are treated as already deleted so destructive workflows can
+    be retried safely after a partial cleanup.
+    """
+    if settings.storage_backend == "azure_blob":
+        from azure.core.exceptions import ResourceNotFoundError
+
+        blob = _container(settings).get_blob_client(
+            _blob_name(settings.azure_storage_audio_prefix, rel_path)
+        )
+        try:
+            blob.delete_blob(delete_snapshots="include")
+        except ResourceNotFoundError:
+            pass
+        return
+
+    path = abs_audio_path(settings, rel_path)
+    path.unlink(missing_ok=True)
+    # Recording paths are data/audio/{speaker}/{script}/take.wav. Remove only
+    # now-empty parents and never walk above the configured audio directory.
+    audio_root = settings.audio_dir.resolve()
+    parent = path.parent
+    while parent != audio_root and audio_root in parent.resolve().parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
 def save_export_tree(settings: Settings, root: Path, batch_rel_path: str) -> None:
     """Persist all generated export files when Blob storage is enabled."""
     if settings.storage_backend != "azure_blob":

@@ -100,6 +100,13 @@ export function patch<T>(url: string, body: unknown): Promise<T> {
   }).then((r) => handle<T>(r));
 }
 
+export function remove<T>(url: string): Promise<T> {
+  return fetch(url, {
+    method: "DELETE",
+    headers: authHeaders(),
+  }).then((r) => handle<T>(r));
+}
+
 export function upload<T>(url: string, blob: Blob, filename: string, fields: Record<string, string | number> = {}): Promise<T> {
   const form = new FormData();
   form.append("file", blob, filename);

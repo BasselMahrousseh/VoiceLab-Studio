@@ -42,6 +42,18 @@ must retain dataset ownership.
 - Exports include the effective text policy and preserve one accepted take per
   script **per speaker**, avoiding accidental loss of other voices.
 
+## Lifecycle controls implemented in v0.3
+
+- Every dataset card exposes **Add with AI**, using that dataset's languages,
+  dialect, policy additions, and targets. Candidates stream into the review
+  list and only selected records are appended.
+- Dataset deletion requires typing the dataset name. The Default dataset cannot
+  be deleted, and assigned recorders must first be moved or deleted. The
+  dataset's scripts, recording metadata, and audio masters are then removed.
+- User deletion requires typing the username. Administrators cannot delete
+  their own account. Deleting a recorder removes login access but preserves the
+  speaker and recording identity used by historical corpus records.
+
 ## Recommended next priorities
 
 ### Production governance
@@ -72,6 +84,6 @@ must retain dataset ownership.
 3. Add formal database migrations (Alembic) before moving from the current
    single-instance SQLite deployment to a managed SQL service.
 
-With the v0.2 corrections, the application is coherent for a controlled pilot.
+With the v0.3 corrections, the application is coherent for a controlled pilot.
 The governance, auditability, and durable-job items above are the main boundary
 between a pilot tool and a production corpus operation.

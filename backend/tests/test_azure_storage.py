@@ -28,6 +28,9 @@ class FakeBlob:
     def download_blob(self):
         return FakeDownloader(self.blobs[self.name])
 
+    def delete_blob(self, **_kwargs):
+        self.blobs.pop(self.name)
+
 
 class FakeContainer:
     def __init__(self):
@@ -57,6 +60,8 @@ def test_blob_master_and_export_round_trip(tmp_path, monkeypatch):
     storage.save_master(settings, rel, b"wav")
     assert fake.blobs[f"audio/{rel}"] == b"wav"
     assert storage.read_master(settings, rel) == b"wav"
+    storage.delete_master(settings, rel)
+    assert f"audio/{rel}" not in fake.blobs
 
     export_root = tmp_path / "batch"
     export_root.mkdir()

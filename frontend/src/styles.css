@@ -347,6 +347,9 @@ kbd {
   font-size: 13px;
   padding: 2px 0;
 }
+.danger-link {
+  color: var(--red);
+}
 .icon-btn {
   background: none;
   border: none;
@@ -1116,7 +1119,6 @@ body.modal-open {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 16px;
-  cursor: pointer;
   font: inherit;
   color: inherit;
   display: flex;
@@ -1189,6 +1191,21 @@ body.modal-open {
   border-top: 1px dashed var(--border);
   margin-top: 14px;
   padding-top: 12px;
+}
+.ds-card-actions {
+  margin-top: auto;
+  padding-top: 4px;
+}
+.danger-zone {
+  margin-top: 24px;
+  padding: 14px;
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  border-radius: 10px;
+  background: rgba(229, 72, 77, 0.06);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 .assign-recorder .input {
   min-width: 280px;

@@ -431,6 +431,86 @@ def test_editable_policy_and_multilingual_dataset():
             client.patch("/api/policy", json={"text": original})
 
 
+def test_guarded_user_and_dataset_deletion():
+    with TestClient(app) as client:
+        _login(client)
+        dataset = client.post(
+            "/api/datasets",
+            json={"name": "Disposable Dataset", "languages": ["ar-AE"]},
+        ).json()
+        added = client.post(
+            f"/api/datasets/{dataset['id']}/scripts",
+            json={"text": "هذي جملة مؤقتة للحذف"},
+        ).json()
+        assert added["imported"] == 1
+
+        recorder = client.post(
+            "/api/auth/users",
+            json={
+                "username": "disposable_recorder",
+                "password": "pass123",
+                "role": "recorder",
+                "dataset_id": dataset["id"],
+            },
+        ).json()
+
+        blocked = client.delete(f"/api/datasets/{dataset['id']}")
+        assert blocked.status_code == 409
+        assert "assigned recorder" in blocked.json()["detail"]
+
+        deleted_user = client.delete(f"/api/auth/users/{recorder['id']}")
+        assert deleted_user.status_code == 200
+        assert deleted_user.json()["speaker_id_preserved"] == recorder["speaker_id"]
+        assert all(
+            user["id"] != recorder["id"] for user in client.get("/api/auth/users").json()
+        )
+        assert any(
+            speaker["id"] == recorder["speaker_id"]
+            for speaker in client.get("/api/speakers").json()
+        )
+
+        script = client.get(
+            f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+        ).json()["items"][0]
+        speaker = client.get("/api/speakers").json()[0]
+        session = client.post(
+            "/api/sessions/start",
+            json={"speaker_id": speaker["id"], "device_info": {"test": True}},
+        ).json()
+        recording = client.post(
+            "/api/recordings",
+            data={"script_pk": script["id"], "session_id": session["id"]},
+            files={
+                "file": (
+                    "take.wav",
+                    wav_bytes(synth_speech()),
+                    "audio/wav",
+                )
+            },
+        ).json()
+        audio_path = get_settings().audio_dir / recording["rel_path"]
+        assert audio_path.exists()
+
+        deleted_dataset = client.delete(f"/api/datasets/{dataset['id']}")
+        assert deleted_dataset.status_code == 200
+        assert deleted_dataset.json() == {
+            "deleted": True,
+            "dataset_id": dataset["id"],
+            "scripts_deleted": 1,
+            "recordings_deleted": 1,
+            "audio_cleanup_failures": 0,
+        }
+        assert not audio_path.exists()
+        assert client.get(f"/api/datasets/{dataset['id']}").status_code == 404
+
+        me = client.get("/api/auth/me").json()
+        assert client.delete(f"/api/auth/users/{me['id']}").status_code == 400
+        default_dataset = next(
+            item for item in client.get("/api/datasets").json() if item["slug"] == "default"
+        )
+        assert client.delete(f"/api/datasets/{default_dataset['id']}").status_code == 400
+
+
 def test_generation_stream_emits_candidates_incrementally(monkeypatch):
     settings = get_settings().model_copy(
         update={

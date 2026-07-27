@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { get, patch, post } from "../api";
+import { get, patch, post, remove } from "../api";
 import { Modal, MultiSelect, Spinner } from "../components/widgets";
 import { AppStatus, Dataset, User } from "../types";
 import GenAIWizard from "./GenAIWizard";
@@ -24,6 +24,7 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
   const [genaiOpen, setGenaiOpen] = useState(false);
   const [genaiDatasetId, setGenaiDatasetId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [deleteFor, setDeleteFor] = useState<Dataset | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
@@ -58,7 +59,7 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
         {items.map((d) => {
           const pct = d.script_count ? Math.round((d.accepted_count / d.script_count) * 100) : 0;
           return (
-            <button key={d.id} className="ds-card lift" onClick={() => setOpenId(d.id)}>
+            <article key={d.id} className="ds-card lift">
               <div className="row spread">
                 <h3>{d.name}</h3>
                 <span className={`chip ${d.status === "active" ? "ok" : "off"}`}>{d.status}</span>
@@ -86,7 +87,21 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
                   </span>
                 )}
               </div>
-            </button>
+              <div className="row gap ds-card-actions">
+                <button className="btn accent small grow" onClick={() => setOpenId(d.id)}>
+                  Open dataset
+                </button>
+                <button
+                  className="btn record small grow"
+                  onClick={() => {
+                    setGenaiDatasetId(d.id);
+                    setGenaiOpen(true);
+                  }}
+                >
+                  ✨ Add with AI
+                </button>
+              </div>
+            </article>
           );
         })}
         {!items.length && (
@@ -115,6 +130,21 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
             setGenaiDatasetId(open.id);
             setOpenId(null);
             setGenaiOpen(true);
+          }}
+          onDelete={() => {
+            setDeleteFor(open);
+            setOpenId(null);
+          }}
+        />
+      )}
+      {deleteFor && (
+        <DeleteDatasetModal
+          dataset={deleteFor}
+          onClose={() => setDeleteFor(null)}
+          onDeleted={(warning) => {
+            setDeleteFor(null);
+            if (warning) setError(warning);
+            load();
           }}
         />
       )}
@@ -289,12 +319,14 @@ function DatasetDetail({
   onClose,
   onChanged,
   onGenerate,
+  onDelete,
 }: {
   dataset: Dataset;
   status: AppStatus | null;
   onClose: () => void;
   onChanged: () => void;
   onGenerate: () => void;
+  onDelete: () => void;
 }) {
   const [instructions, setInstructions] = useState(dataset.instructions);
   const [languages, setLanguages] = useState(
@@ -516,6 +548,97 @@ function DatasetDetail({
         Assigning a recorder who already has a dataset moves them to this one.
       </div>
       <AddRecorder datasetId={dataset.id} onAdded={() => { loadRecorders(); onChanged(); }} />
+
+      <div className="danger-zone">
+        <div>
+          <b>Delete dataset</b>
+          <div className="muted small">
+            Permanently removes its scripts, recording metadata, and stored audio.
+          </div>
+        </div>
+        <button
+          className="btn danger small"
+          onClick={onDelete}
+          disabled={dataset.slug === "default"}
+          title={dataset.slug === "default" ? "The Default dataset is required by the application" : ""}
+        >
+          Delete dataset
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------------
+function DeleteDatasetModal({
+  dataset,
+  onClose,
+  onDeleted,
+}: {
+  dataset: Dataset;
+  onClose: () => void;
+  onDeleted: (warning?: string) => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await remove<{
+        scripts_deleted: number;
+        recordings_deleted: number;
+        audio_cleanup_failures: number;
+      }>(`/api/datasets/${dataset.id}`);
+      if (result.audio_cleanup_failures) {
+        onDeleted(
+          `The dataset was deleted, but ${result.audio_cleanup_failures} audio file(s) still need storage cleanup.`
+        );
+        return;
+      }
+      onDeleted();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Delete dataset — ${dataset.name}`} onClose={onClose}>
+      <div className="banner error">
+        This permanently deletes all {dataset.script_count} scripts, recording metadata, and stored
+        audio in this dataset. This cannot be undone.
+      </div>
+      {dataset.recorder_count > 0 && (
+        <div className="banner warn">
+          Move or delete the {dataset.recorder_count} assigned recorder account(s) first.
+        </div>
+      )}
+      <label className="field">
+        <span>
+          Type <b>{dataset.name}</b> to confirm
+        </span>
+        <input
+          className="input"
+          value={confirmation}
+          autoFocus
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+      </label>
+      {error && <div className="banner error">{error}</div>}
+      <div className="row gap modal-actions">
+        <button
+          className="btn danger"
+          disabled={busy || dataset.recorder_count > 0 || confirmation !== dataset.name}
+          onClick={submit}
+        >
+          {busy ? <Spinner label="Deleting…" /> : "Permanently delete dataset"}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+      </div>
     </Modal>
   );
 }

@@ -4,6 +4,8 @@ A scripted **multilingual voice-recording and dataset-quality platform** for
 building high-quality Arabic, English, and code-switched audio-text pairs for
 TTS / voice-cloning fine-tuning, with first-class Emirati dialect governance.
 
+Current application version: **0.3.0**.
+
 Core pipeline:
 
 ```
@@ -35,6 +37,16 @@ Detailed technical docs live in [`docs/`](docs/README.md):
 - [Product reevaluation](docs/PRODUCT_REEVALUATION.md) — feature boundaries, v0.2 corrections, production priorities
 - [Tech stack](docs/TECH_STACK.md) — every technology, versions, and rationale
 - [Data & storage](docs/DATA_AND_STORAGE.md) — where data is saved, the database, full schema
+
+Lifecycle controls:
+
+- Use **Add with AI** on any dataset card to stream, review, and append a new
+  generated batch without changing existing scripts or recordings.
+- Administrators can permanently delete non-default datasets after moving or
+  deleting assigned recorders. This removes the dataset's scripts, recording
+  metadata, and stored audio.
+- Administrators can delete other user accounts. Historical speaker and
+  recording identity is preserved for corpus traceability.
 
 ## Quick start
 

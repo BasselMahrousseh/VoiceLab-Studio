@@ -142,3 +142,32 @@ def patch_user(
     db.commit()
     db.refresh(user)
     return user_out(db, user)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Delete a login account without erasing historical voice identity."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.id == admin.id:
+        raise HTTPException(400, "You cannot delete your own account")
+    if user.role == "admin":
+        admin_count = db.query(func.count(User.id)).filter(User.role == "admin").scalar() or 0
+        if admin_count <= 1:
+            raise HTTPException(400, "The last administrator account cannot be deleted")
+
+    username = user.username
+    speaker_id = user.speaker_id
+    db.delete(user)
+    db.commit()
+    return {
+        "deleted": True,
+        "user_id": user_id,
+        "username": username,
+        "speaker_id_preserved": speaker_id,
+    }
