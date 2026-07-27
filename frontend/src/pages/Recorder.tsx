@@ -188,7 +188,19 @@ export default function Recorder() {
           </div>
         )}
 
-        {!script ? (
+        {!script && progress?.total === 0 ? (
+          <div className="panel done-panel fade-in">
+            <div className="done-emoji">📭</div>
+            <h2>No scripts are available yet</h2>
+            <p className="muted">
+              Your account is assigned to <b>{ctx?.dataset?.name || "a dataset"}</b>, but it has no
+              active recording scripts. Please contact the project administrator.
+            </p>
+            <button className="btn ghost" onClick={loadContext}>
+              Check again
+            </button>
+          </div>
+        ) : !script ? (
           <div className="panel done-panel fade-in">
             <div className="done-emoji">🎉</div>
             <h2>All done — thank you!</h2>

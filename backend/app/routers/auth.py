@@ -93,6 +93,8 @@ def create_user(
 
     speaker_id = None
     if payload.role == "recorder":
+        if not payload.dataset_id:
+            raise HTTPException(400, "Recorder accounts must be assigned to a dataset")
         key = (payload.speaker_key or username).strip()
         speaker = _ensure_speaker(db, key, payload.display_name)
         speaker_id = speaker.id
@@ -130,8 +132,10 @@ def patch_user(
         data.pop("password", None)
     if "active" in data and not data["active"] and user.id == admin.id:
         raise HTTPException(400, "You cannot deactivate your own account")
-    if "dataset_id" in data and data["dataset_id"] is not None:
-        if not db.get(Dataset, data["dataset_id"]):
+    if "dataset_id" in data:
+        if user.role == "recorder" and data["dataset_id"] is None:
+            raise HTTPException(400, "Recorder accounts must be assigned to a dataset")
+        if data["dataset_id"] is not None and not db.get(Dataset, data["dataset_id"]):
             raise HTTPException(404, "Assigned dataset not found")
     for key, value in data.items():
         setattr(user, key, value)

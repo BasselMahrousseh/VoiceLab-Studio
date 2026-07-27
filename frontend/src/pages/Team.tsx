@@ -10,11 +10,12 @@ export default function Team() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [resetFor, setResetFor] = useState<User | null>(null);
+  const [savingDatasetFor, setSavingDatasetFor] = useState<number | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
     get<User[]>("/api/auth/users").then(setUsers).catch((e) => setError(e.message));
-    get<Dataset[]>("/api/datasets").then(setDatasets).catch(() => undefined);
+    get<Dataset[]>("/api/datasets").then(setDatasets).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -24,6 +25,19 @@ export default function Team() {
       load();
     } catch (e) {
       setError((e as Error).message);
+    }
+  };
+
+  const assignDataset = async (u: User, datasetId: number) => {
+    setSavingDatasetFor(u.id);
+    setError("");
+    try {
+      await patch(`/api/auth/users/${u.id}`, { dataset_id: datasetId });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingDatasetFor(null);
     }
   };
 
@@ -60,7 +74,30 @@ export default function Team() {
               <td>
                 <span className={`chip ${u.role === "admin" ? "accent" : ""}`}>{u.role}</span>
               </td>
-              <td className="muted small">{u.dataset_name || (u.role === "recorder" ? "—" : "")}</td>
+              <td className="muted small">
+                {u.role === "recorder" ? (
+                  <select
+                    className="input dataset-assignment"
+                    aria-label={`Dataset for ${u.username}`}
+                    value={u.dataset_id ?? 0}
+                    disabled={savingDatasetFor === u.id}
+                    onChange={(e) => void assignDataset(u, Number(e.target.value))}
+                  >
+                    {!u.dataset_id && <option value={0}>Select dataset</option>}
+                    {datasets.map((d) => (
+                      <option
+                        key={d.id}
+                        value={d.id}
+                        disabled={d.script_count === 0 && d.id !== u.dataset_id}
+                      >
+                        {d.name} · {d.script_count} scripts
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  ""
+                )}
+              </td>
               <td className="muted small">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "never"}</td>
               <td>
                 <span className={`chip ${u.active ? "ok" : "off"}`}>{u.active ? "active" : "disabled"}</span>
@@ -99,16 +136,24 @@ function AddUserModal({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const eligibleDatasets = datasets.filter((d) => d.status === "active" && d.script_count > 0);
+  const defaultDatasetId = eligibleDatasets[0]?.id ?? 0;
   const [form, setForm] = useState({
     username: "",
     password: "",
     display_name: "",
     role: "recorder",
-    dataset_id: datasets[0]?.id ?? 0,
+    dataset_id: defaultDatasetId,
     speaker_key: "",
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!form.dataset_id && defaultDatasetId) {
+      setForm((current) => ({ ...current, dataset_id: defaultDatasetId }));
+    }
+  }, [defaultDatasetId, form.dataset_id]);
 
   const submit = async () => {
     setBusy(true);
@@ -160,9 +205,9 @@ function AddUserModal({
               Assigned dataset
               <select className="input" value={form.dataset_id} onChange={(e) => setForm({ ...form, dataset_id: Number(e.target.value) })}>
                 <option value={0}>— none —</option>
-                {datasets.map((d) => (
+                {eligibleDatasets.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.name}
+                    {d.name} · {d.script_count} scripts
                   </option>
                 ))}
               </select>
@@ -175,8 +220,20 @@ function AddUserModal({
         )}
       </div>
       {error && <div className="banner error">{error}</div>}
-      <div className="row gap" style={{ marginTop: 12 }}>
-        <button className="btn accept" onClick={submit} disabled={busy || !form.username || form.password.length < 4}>
+      {form.role === "recorder" && !eligibleDatasets.length && (
+        <div className="banner warn">Create an active dataset with scripts before adding a recorder.</div>
+      )}
+      <div className="row gap modal-actions">
+        <button
+          className="btn accept"
+          onClick={submit}
+          disabled={
+            busy ||
+            !form.username.trim() ||
+            form.password.length < 4 ||
+            (form.role === "recorder" && !form.dataset_id)
+          }
+        >
           {busy ? <Spinner label="Creating…" /> : "Create user"}
         </button>
         <button className="btn ghost" onClick={onClose}>

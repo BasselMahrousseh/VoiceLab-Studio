@@ -374,6 +374,11 @@ textarea.input {
   font-size: 12px;
   padding: 6px 8px;
 }
+.dataset-assignment {
+  width: min(230px, 100%);
+  font-size: 12px;
+  padding: 6px 8px;
+}
 .check {
   display: flex;
   align-items: center;

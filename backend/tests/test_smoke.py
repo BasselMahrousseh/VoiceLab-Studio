@@ -249,6 +249,14 @@ def test_auth_and_recorder_flow():
     with TestClient(app) as client:
         _login(client)  # admin
 
+        # recorder accounts must always have work scoped through a dataset
+        unassigned = client.post(
+            "/api/auth/users",
+            json={"username": "unassigned", "password": "pass123", "role": "recorder"},
+        )
+        assert unassigned.status_code == 400
+        assert unassigned.json()["detail"] == "Recorder accounts must be assigned to a dataset"
+
         # admin creates a dataset with recording instructions
         ds = client.post(
             "/api/datasets",
