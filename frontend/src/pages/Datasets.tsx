@@ -22,6 +22,7 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
   const [items, setItems] = useState<Dataset[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [genaiOpen, setGenaiOpen] = useState(false);
+  const [genaiDatasetId, setGenaiDatasetId] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [error, setError] = useState("");
 
@@ -46,7 +47,7 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
           <button className="btn ghost" onClick={() => setCreateOpen(true)}>
             ＋ New (manual)
           </button>
-          <button className="btn record" onClick={() => setGenaiOpen(true)}>
+          <button className="btn record" onClick={() => { setGenaiDatasetId(null); setGenaiOpen(true); }}>
             ✨ Generate with GenAI
           </button>
         </div>
@@ -92,9 +93,26 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
         <CreateDatasetModal status={status} onClose={() => setCreateOpen(false)} onCreated={(id) => { load(); setCreateOpen(false); setOpenId(id); }} />
       )}
       {genaiOpen && (
-        <GenAIWizard status={status} onClose={() => setGenaiOpen(false)} onCreated={(id) => { load(); setGenaiOpen(false); setOpenId(id); }} />
+        <GenAIWizard
+          status={status}
+          dataset={items.find((d) => d.id === genaiDatasetId) ?? null}
+          onClose={() => setGenaiOpen(false)}
+          onCreated={(id) => { load(); setGenaiOpen(false); setGenaiDatasetId(null); setOpenId(id); }}
+        />
       )}
-      {open && <DatasetDetail dataset={open} status={status} onClose={() => setOpenId(null)} onChanged={load} />}
+      {open && (
+        <DatasetDetail
+          dataset={open}
+          status={status}
+          onClose={() => setOpenId(null)}
+          onChanged={load}
+          onGenerate={() => {
+            setGenaiDatasetId(open.id);
+            setOpenId(null);
+            setGenaiOpen(true);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -218,22 +236,35 @@ function DatasetDetail({
   status,
   onClose,
   onChanged,
+  onGenerate,
 }: {
   dataset: Dataset;
   status: AppStatus | null;
   onClose: () => void;
   onChanged: () => void;
+  onGenerate: () => void;
 }) {
   const [instructions, setInstructions] = useState(dataset.instructions);
   const [recorders, setRecorders] = useState<User[]>([]);
+  const [allRecorders, setAllRecorders] = useState<User[]>([]);
+  const [assignId, setAssignId] = useState(0);
   const [scripts, setScripts] = useState("");
   const [style, setStyle] = useState("neutral");
   const [domain, setDomain] = useState("customer_support");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const loadRecorders = useCallback(() => {
-    get<User[]>(`/api/datasets/${dataset.id}/recorders`).then(setRecorders).catch(() => undefined);
+    Promise.all([
+      get<User[]>(`/api/datasets/${dataset.id}/recorders`),
+      get<User[]>("/api/auth/users"),
+    ])
+      .then(([assigned, users]) => {
+        setRecorders(assigned);
+        setAllRecorders(users.filter((user) => user.role === "recorder"));
+      })
+      .catch((e) => setError(e.message));
   }, [dataset.id]);
   useEffect(loadRecorders, [loadRecorders]);
 
@@ -249,6 +280,11 @@ function DatasetDetail({
   };
 
   const addScripts = async () => {
+    if (!scripts.trim()) {
+      setError("Paste at least one sentence first.");
+      return;
+    }
+    setBusy(true);
     setError("");
     setMsg("");
     try {
@@ -261,8 +297,31 @@ function DatasetDetail({
       onChanged();
     } catch (e) {
       setError((e as Error).message);
+    } finally {
+      setBusy(false);
     }
   };
+
+  const assignRecorder = async () => {
+    if (!assignId) return;
+    const user = allRecorders.find((item) => item.id === assignId);
+    setBusy(true);
+    setError("");
+    setMsg("");
+    try {
+      await patch(`/api/auth/users/${assignId}`, { dataset_id: dataset.id });
+      setMsg(`${user?.display_name || user?.username || "Recorder"} is now assigned to ${dataset.name}.`);
+      setAssignId(0);
+      loadRecorders();
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const availableRecorders = allRecorders.filter((user) => user.dataset_id !== dataset.id);
 
   return (
     <Modal title={dataset.name} onClose={onClose} wide>
@@ -290,7 +349,13 @@ function DatasetDetail({
         </button>
       </div>
 
-      <h3 className="section-head">Add scripts</h3>
+      <div className="row spread section-head">
+        <div>
+          <h3>Add more data</h3>
+          <div className="muted small">Paste sentences below or generate and review a new AI batch.</div>
+        </div>
+        <button className="btn record small" onClick={onGenerate}>✨ Generate with AI</button>
+      </div>
       <div className="row gap">
         <select className="input" value={style} onChange={(e) => setStyle(e.target.value)}>
           {(status?.enums.styles ?? ["neutral"]).map((s) => (
@@ -305,8 +370,8 @@ function DatasetDetail({
       </div>
       <textarea className="input arabic" dir="rtl" rows={4} style={{ marginTop: 8 }} placeholder={"سطر لكل جملة…"} value={scripts} onChange={(e) => setScripts(e.target.value)} />
       <div className="row" style={{ marginTop: 8 }}>
-        <button className="btn accent small" onClick={addScripts} disabled={!scripts.trim()}>
-          Add scripts
+        <button className="btn accent small" onClick={addScripts} disabled={busy || !scripts.trim()}>
+          {busy ? <Spinner label="Adding…" /> : "Add pasted scripts"}
         </button>
       </div>
 
@@ -322,6 +387,34 @@ function DatasetDetail({
           </div>
         ))}
         {!recorders.length && <div className="muted small">No recorders assigned yet.</div>}
+      </div>
+      <div className="assign-recorder row gap wrap">
+        <select
+          className="input grow"
+          value={assignId}
+          onChange={(event) => setAssignId(Number(event.target.value))}
+          disabled={!availableRecorders.length || dataset.script_count === 0}
+        >
+          <option value={0}>
+            {dataset.script_count === 0
+              ? "Add scripts before assigning a recorder"
+              : availableRecorders.length
+                ? "Select an existing recorder…"
+                : "All recorders are already assigned here"}
+          </option>
+          {availableRecorders.map((user) => (
+            <option key={user.id} value={user.id}>
+              {user.display_name || user.username} (@{user.username})
+              {user.dataset_name ? ` — currently ${user.dataset_name}` : ""}
+            </option>
+          ))}
+        </select>
+        <button className="btn accent small" onClick={assignRecorder} disabled={busy || !assignId || dataset.script_count === 0}>
+          Assign to this dataset
+        </button>
+      </div>
+      <div className="muted small" style={{ marginTop: 6 }}>
+        Assigning a recorder who already has a dataset moves them to this one.
       </div>
       <AddRecorder datasetId={dataset.id} onAdded={() => { loadRecorders(); onChanged(); }} />
     </Modal>

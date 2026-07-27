@@ -56,6 +56,42 @@ export function post<T>(url: string, body?: unknown): Promise<T> {
   }).then((r) => handle<T>(r));
 }
 
+/** Consume a newline-delimited JSON response as it arrives. */
+export async function streamPost<T>(
+  url: string,
+  body: unknown,
+  onEvent: (event: T) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (resp.status === 401 && onUnauthorized) onUnauthorized();
+  if (!resp.ok) {
+    await handle<never>(resp);
+    return;
+  }
+  if (!resp.body) throw new Error("The browser could not read the generation stream.");
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      if (line.trim()) onEvent(JSON.parse(line) as T);
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) onEvent(JSON.parse(buffer) as T);
+}
+
 export function patch<T>(url: string, body: unknown): Promise<T> {
   return fetch(url, {
     method: "PATCH",

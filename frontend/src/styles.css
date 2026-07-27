@@ -174,6 +174,9 @@ kbd {
 .section-head {
   margin: 22px 0 10px;
 }
+.section-head h3 {
+  margin: 0 0 2px;
+}
 
 /* ---------- generic ---------- */
 .row {
@@ -805,6 +808,16 @@ body.modal-open {
 .candidate .arabic {
   font-size: 17px;
 }
+.generation-live {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+.generation-live .progress-track {
+  margin-bottom: 8px;
+}
 
 /* ---------- misc ---------- */
 .kv-grid {
@@ -1140,7 +1153,11 @@ body.modal-open {
 }
 .add-recorder {
   border-top: 1px dashed var(--border);
+  margin-top: 14px;
   padding-top: 12px;
+}
+.assign-recorder .input {
+  min-width: 280px;
 }
 
 /* ---------- responsive ---------- */
@@ -1163,6 +1180,14 @@ body.modal-open {
   }
   .form-grid {
     grid-template-columns: 1fr;
+  }
+  .assign-recorder {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .assign-recorder .input {
+    min-width: 0;
+    width: 100%;
   }
   .modal-backdrop {
     padding: 8px;

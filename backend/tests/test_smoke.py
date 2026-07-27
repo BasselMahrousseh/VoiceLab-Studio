@@ -309,3 +309,71 @@ def test_auth_and_recorder_flow():
         ctx2 = rec_client.get("/api/recorder/context").json()
         assert ctx2["progress"] == {"total": 2, "done": 1, "remaining": 1}
         assert ctx2["next_script"]["id"] != first["id"]
+
+        # an existing recorder can be moved to another populated dataset
+        second_ds = client.post(
+            "/api/datasets",
+            json={"name": "Second Recorder Assignment"},
+        ).json()
+        client.post(
+            f"/api/datasets/{second_ds['id']}/scripts",
+            json={"text": "هذه جملة جديدة للمجموعة الثانية"},
+        )
+        reassigned = client.patch(
+            f"/api/auth/users/{rec_user['id']}",
+            json={"dataset_id": second_ds["id"]},
+        ).json()
+        assert reassigned["dataset_id"] == second_ds["id"]
+        assert reassigned["dataset_name"] == second_ds["name"]
+        moved_ctx = rec_client.get("/api/recorder/context").json()
+        assert moved_ctx["dataset"]["id"] == second_ds["id"]
+        assert moved_ctx["progress"] == {"total": 1, "done": 0, "remaining": 1}
+
+
+def test_generation_stream_emits_candidates_incrementally(monkeypatch):
+    settings = get_settings().model_copy(
+        update={
+            "azure_openai_endpoint": "https://example.openai.azure.com",
+            "azure_openai_api_key": "test-key",
+            "llm_deployment": "test-model",
+        }
+    )
+    serial = iter(range(100))
+
+    def fake_generate(params, _settings):
+        return [
+            {
+                "display_text": f"جملة اختبار رقم {next(serial)}",
+                "style": "neutral",
+                "domain": "general",
+                "dialect": "emirati",
+            }
+            for _ in range(params["count"])
+        ]
+
+    from app.services import llm_scripts
+
+    monkeypatch.setattr(llm_scripts, "generate_scripts", fake_generate)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        with TestClient(app) as client:
+            _login(client)
+            with client.stream(
+                "POST",
+                "/api/scripts/generate/stream",
+                json={"count": 7, "batch_name": "stream test"},
+            ) as response:
+                assert response.status_code == 200
+                events = [json.loads(line) for line in response.iter_lines() if line]
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert events[0]["type"] == "start"
+    assert sum(event["type"] == "candidate" for event in events) == 7
+    assert events[-1] == {
+        "type": "complete",
+        "model": "test-model",
+        "count": 7,
+        "requested": 7,
+        "failed_batches": 0,
+    }

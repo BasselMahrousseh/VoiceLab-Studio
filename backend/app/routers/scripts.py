@@ -1,4 +1,8 @@
+import json
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -245,6 +249,140 @@ def generate(
         "count": len(results),
         "candidates": results,
     }
+
+
+@router.post("/generate/stream")
+def generate_stream(
+    params: GenerateParams,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: object = Depends(require_admin),
+):
+    """Stream candidate scripts as newline-delimited JSON.
+
+    Generation is split into small parallel batches so the browser receives
+    useful records as soon as the first batch is ready. Heartbeats keep the
+    App Service connection active while the model is thinking. Nothing is
+    persisted until the administrator reviews and imports the candidates.
+    """
+    if not settings.llm_configured():
+        raise HTTPException(
+            503,
+            "LLM endpoint is not configured. Set AZURE_OPENAI_ENDPOINT, "
+            "AZURE_OPENAI_API_KEY and LLM_DEPLOYMENT in .env",
+        )
+
+    existing_hashes = {h for (h,) in db.query(Script.normalized_hash).all()}
+    existing_texts = [
+        tn.normalize_arabic(t) for (t,) in db.query(Script.training_text).all()
+    ]
+    requested = params.count
+    # Five records is a good balance: the first result arrives quickly without
+    # turning a 30-record generation into 30 separate model requests.
+    batch_size = min(5, requested)
+    batch_counts = [
+        min(batch_size, requested - offset)
+        for offset in range(0, requested, batch_size)
+    ]
+    base_params = params.model_dump()
+
+    def line(event: dict) -> str:
+        return json.dumps(event, ensure_ascii=False) + "\n"
+
+    def generate_batch(index: int, count: int) -> tuple[int, list[dict]]:
+        batch_params = {
+            **base_params,
+            "count": count,
+            "batch_name": f"{params.batch_name} · part {index + 1}",
+        }
+        return index, llm_scripts.generate_scripts(batch_params, settings)
+
+    def events():
+        batch_hashes: set[str] = set()
+        emitted = 0
+        failures: list[str] = []
+        executor = ThreadPoolExecutor(max_workers=min(3, len(batch_counts)))
+        futures = {
+            executor.submit(generate_batch, index, count)
+            for index, count in enumerate(batch_counts)
+        }
+        try:
+            yield line(
+                {
+                    "type": "start",
+                    "model": settings.llm_deployment,
+                    "requested": requested,
+                    "batches": len(batch_counts),
+                }
+            )
+            pending = set(futures)
+            while pending and emitted < requested:
+                done, pending = wait(pending, timeout=3, return_when=FIRST_COMPLETED)
+                if not done:
+                    yield line(
+                        {
+                            "type": "heartbeat",
+                            "generated": emitted,
+                            "requested": requested,
+                        }
+                    )
+                    continue
+
+                for future in done:
+                    try:
+                        batch_index, items = future.result()
+                    except Exception as exc:
+                        message = f"{type(exc).__name__}: {exc}"
+                        failures.append(message)
+                        yield line({"type": "batch_error", "message": message})
+                        continue
+
+                    for item in items:
+                        if emitted >= requested:
+                            break
+                        candidate = llm_scripts.validate_item(
+                            item, existing_hashes, existing_texts, batch_hashes
+                        )
+                        emitted += 1
+                        yield line(
+                            {
+                                "type": "candidate",
+                                "index": emitted - 1,
+                                "batch": batch_index + 1,
+                                "candidate": candidate,
+                            }
+                        )
+
+            if emitted == 0 and failures:
+                yield line(
+                    {
+                        "type": "error",
+                        "message": "All generation batches failed: " + "; ".join(failures),
+                    }
+                )
+            else:
+                yield line(
+                    {
+                        "type": "complete",
+                        "model": settings.llm_deployment,
+                        "count": emitted,
+                        "requested": requested,
+                        "failed_batches": len(failures),
+                    }
+                )
+        finally:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.patch("/{script_pk}", response_model=ScriptOut)

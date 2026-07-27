@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { post } from "../api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { post, streamPost } from "../api";
 import { Chip, Modal, MultiSelect, Spinner } from "../components/widgets";
 import { AppStatus, Dataset, GenerateCandidate } from "../types";
 
@@ -20,21 +20,23 @@ function fmtHours(sec: number): string {
 
 export default function GenAIWizard({
   status,
+  dataset,
   onClose,
   onCreated,
 }: {
   status: AppStatus | null;
+  dataset?: Dataset | null;
   onClose: () => void;
   onCreated: (id: number) => void;
 }) {
   const [step, setStep] = useState<"plan" | "review">("plan");
   const [plan, setPlan] = useState({
-    name: "",
-    description: "",
-    dialect: "emirati",
-    instructions: DEFAULT_INSTRUCTIONS,
-    target_sample_count: 200,
-    avg_duration_sec: 6,
+    name: dataset?.name ?? "",
+    description: dataset?.description ?? "",
+    dialect: dataset?.dialect ?? "emirati",
+    instructions: dataset?.instructions ?? DEFAULT_INSTRUCTIONS,
+    target_sample_count: dataset?.target_sample_count || 200,
+    avg_duration_sec: dataset?.target_avg_duration_sec || 6,
     styles: ["neutral", "friendly"] as string[],
     domains: ["customer_support"] as string[],
     coverage: [] as string[],
@@ -46,7 +48,12 @@ export default function GenAIWizard({
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [model, setModel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [generated, setGenerated] = useState(0);
   const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   const projected = useMemo(
     () => plan.target_sample_count * plan.avg_duration_sec,
@@ -55,7 +62,7 @@ export default function GenAIWizard({
   const batchWords = Math.max(2, Math.round(plan.avg_duration_sec * 2.3));
   const llmReady = !!status?.llm_configured;
   const planValid =
-    !!plan.name.trim() &&
+    (!!dataset || !!plan.name.trim()) &&
     plan.target_sample_count > 0 &&
     plan.avg_duration_sec > 0 &&
     plan.generate_count > 0 &&
@@ -65,15 +72,31 @@ export default function GenAIWizard({
   const set = (patch: Partial<typeof plan>) => setPlan((p) => ({ ...p, ...patch }));
 
   const generate = async () => {
-    if (!plan.name.trim()) {
+    if (!dataset && !plan.name.trim()) {
       setError("Give the dataset a name first.");
       return;
     }
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setBusy(true);
     setError("");
+    setCandidates([]);
+    setSelected(new Set());
+    setGenerated(0);
+    setStep("review");
     try {
-      const resp = await post<{ model: string; candidates: GenerateCandidate[] }>(
-        "/api/scripts/generate",
+      await streamPost<{
+        type: "start" | "heartbeat" | "candidate" | "complete" | "batch_error" | "error";
+        model?: string;
+        candidate?: GenerateCandidate;
+        index?: number;
+        message?: string;
+        failed_batches?: number;
+        count?: number;
+        requested?: number;
+      }>(
+        "/api/scripts/generate/stream",
         {
           count: plan.generate_count,
           styles: plan.styles,
@@ -83,33 +106,62 @@ export default function GenAIWizard({
           topics: plan.topics,
           brand_terms: plan.brand_terms,
           avg_duration_sec: plan.avg_duration_sec,
-          batch_name: `${plan.name} · batch 1`,
-        }
+          batch_name: `${plan.name} · AI batch`,
+        },
+        (event) => {
+          if (event.model) setModel(event.model);
+          if (event.type === "candidate" && event.candidate) {
+            setCandidates((current) => [...(current ?? []), event.candidate!]);
+            setGenerated((current) => current + 1);
+            if (event.candidate.ok) {
+              setSelected((current) => {
+                const next = new Set(current);
+                next.add(event.index ?? current.size);
+                return next;
+              });
+            }
+          } else if (event.type === "batch_error") {
+            setError((current) =>
+              current
+                ? `${current} One generation batch also failed: ${event.message}`
+                : `One generation batch failed; the other batches are still running. ${event.message}`
+            );
+          } else if (event.type === "error") {
+            setError(event.message || "Generation failed.");
+          } else if (
+            event.type === "complete" &&
+            event.count !== undefined &&
+            event.requested !== undefined &&
+            event.count < event.requested
+          ) {
+            setError(
+              `The model returned ${event.count} of ${event.requested} requested records. You can review these or regenerate.`
+            );
+          }
+        },
+        controller.signal
       );
-      setCandidates(resp.candidates);
-      setModel(resp.model);
-      setSelected(new Set(resp.candidates.map((c, i) => (c.ok ? i : -1)).filter((i) => i >= 0)));
-      setStep("review");
     } catch (e) {
-      setError((e as Error).message);
+      if ((e as Error).name !== "AbortError") setError((e as Error).message);
     } finally {
+      if (abortRef.current === controller) abortRef.current = null;
       setBusy(false);
     }
   };
 
-  const createDataset = async () => {
+  const saveCandidates = async () => {
     if (!candidates) return;
-    setBusy(true);
+    setSaving(true);
     setError("");
     try {
-      const ds = await post<Dataset>("/api/datasets", {
-        name: plan.name,
-        description: plan.description,
-        instructions: plan.instructions,
-        dialect: plan.dialect,
-        target_sample_count: plan.target_sample_count,
-        target_avg_duration_sec: plan.avg_duration_sec,
-      });
+      const ds = dataset ?? await post<Dataset>("/api/datasets", {
+          name: plan.name,
+          description: plan.description,
+          instructions: plan.instructions,
+          dialect: plan.dialect,
+          target_sample_count: plan.target_sample_count,
+          target_avg_duration_sec: plan.avg_duration_sec,
+        });
       const items = [...selected].map((i) => {
         const c = candidates[i].computed;
         return {
@@ -126,18 +178,19 @@ export default function GenAIWizard({
       await post(`/api/datasets/${ds.id}/import`, {
         items,
         source: "llm",
-        generation_batch: `${plan.name} · batch 1`,
+        generation_batch: `${plan.name} · AI batch`,
         generation_model: model,
       });
       onCreated(ds.id);
     } catch (e) {
       setError((e as Error).message);
-      setBusy(false);
+    } finally {
+      setSaving(false);
     }
   };
 
   return (
-    <Modal title="Create dataset with GenAI" onClose={onClose} wide>
+    <Modal title={dataset ? `Add AI scripts to ${dataset.name}` : "Create dataset with GenAI"} onClose={onClose} wide>
       {!llmReady && (
         <div className="banner warn">
           The LLM endpoint isn't configured. Set <code>AZURE_OPENAI_ENDPOINT</code>,{" "}
@@ -147,18 +200,26 @@ export default function GenAIWizard({
 
       {step === "plan" && (
         <>
+          {dataset && (
+            <div className="banner info">
+              New scripts will be reviewed first, then appended to <b>{dataset.name}</b>. Existing
+              scripts and recordings will not be changed.
+            </div>
+          )}
           <div className="form-grid">
-            <label>
-              Dataset name
-              <input
-                className="input"
-                placeholder="Emirati Customer Support v1"
-                value={plan.name}
-                maxLength={200}
-                required
-                onChange={(e) => set({ name: e.target.value })}
-              />
-            </label>
+            {!dataset && (
+              <label>
+                Dataset name
+                <input
+                  className="input"
+                  placeholder="Emirati Customer Support v1"
+                  value={plan.name}
+                  maxLength={200}
+                  required
+                  onChange={(e) => set({ name: e.target.value })}
+                />
+              </label>
+            )}
             <label>
               Dialect
               <select className="input" value={plan.dialect} onChange={(e) => set({ dialect: e.target.value })}>
@@ -167,22 +228,26 @@ export default function GenAIWizard({
                 ))}
               </select>
             </label>
-            <label className="span2">
-              Description (optional)
-              <input className="input" placeholder="Goal of this dataset" value={plan.description} onChange={(e) => set({ description: e.target.value })} />
-            </label>
+            {!dataset && (
+              <label className="span2">
+                Description (optional)
+                <input className="input" placeholder="Goal of this dataset" value={plan.description} onChange={(e) => set({ description: e.target.value })} />
+              </label>
+            )}
 
-            <label>
-              Target samples
-              <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Math.max(1, Number(e.target.value) || 1) })} />
-            </label>
+            {!dataset && (
+              <label>
+                Target samples
+                <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Math.max(1, Number(e.target.value) || 1) })} />
+              </label>
+            )}
             <label>
               Avg. duration / clip (sec)
               <input type="number" min={1} max={60} className="input" value={plan.avg_duration_sec} onChange={(e) => set({ avg_duration_sec: Math.min(60, Math.max(1, Number(e.target.value) || 1)) })} />
             </label>
           </div>
 
-          <div className="plan-summary">
+          {!dataset && <div className="plan-summary">
             <div className="plan-metric">
               <div className="plan-value">{plan.target_sample_count.toLocaleString()}</div>
               <div className="muted small">target samples</div>
@@ -200,7 +265,7 @@ export default function GenAIWizard({
             <div className="plan-note muted small">
               ≈ {batchWords} words per sentence at a natural pace
             </div>
-          </div>
+          </div>}
 
           <div className="form-grid">
             <label className="span2">
@@ -223,10 +288,12 @@ export default function GenAIWizard({
               Topic seeds (optional)
               <textarea className="input arabic" dir="rtl" rows={2} placeholder="تفعيل باقة، شكوى فاتورة، استفسار عن التغطية…" value={plan.topics} onChange={(e) => set({ topics: e.target.value })} />
             </label>
-            <label className="span2">
-              Recording instructions (shown to recorders)
-              <textarea className="input" rows={5} value={plan.instructions} onChange={(e) => set({ instructions: e.target.value })} />
-            </label>
+            {!dataset && (
+              <label className="span2">
+                Recording instructions (shown to recorders)
+                <textarea className="input" rows={5} value={plan.instructions} onChange={(e) => set({ instructions: e.target.value })} />
+              </label>
+            )}
             <label>
               Generate now (first batch)
               <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Math.max(1, Number(e.target.value) || 1)) })} />
@@ -248,10 +315,25 @@ export default function GenAIWizard({
         <>
           <div className="row spread">
             <span className="muted small">
-              {selected.size} of {candidates.length} selected · generated by {model} · uncheck any you don't want
+              {busy
+                ? `Generating live: ${generated} of ${plan.generate_count} received`
+                : `${selected.size} of ${candidates.length} selected`}
+              {model && ` · generated by ${model}`}
+              {!busy && " · uncheck any you don't want"}
             </span>
-            <button className="link-btn" onClick={() => setStep("plan")}>← back to plan</button>
+            <button className="link-btn" onClick={() => setStep("plan")} disabled={busy}>← back to plan</button>
           </div>
+          {busy && (
+            <div className="generation-live">
+              <div className="progress-track">
+                <div className="progress-fill" style={{ width: `${Math.min(100, (generated / plan.generate_count) * 100)}%` }} />
+              </div>
+              <div className="row spread small muted">
+                <Spinner label={generated ? "More records are arriving…" : "The model is preparing the first records…"} />
+                <button className="link-btn" onClick={() => abortRef.current?.abort()}>Stop</button>
+              </div>
+            </div>
+          )}
           <div className="candidate-list">
             {candidates.map((c, i) => (
               <div key={i} className={`candidate ${c.ok ? "" : "error"}`}>
@@ -290,10 +372,14 @@ export default function GenAIWizard({
           </div>
           {error && <div className="banner error">{error}</div>}
           <div className="row gap modal-actions">
-            <button className="btn accept" onClick={createDataset} disabled={busy || selected.size === 0}>
-              {busy ? <Spinner label="Creating dataset…" /> : `Create dataset with ${selected.size} scripts`}
+            <button className="btn accept" onClick={saveCandidates} disabled={busy || saving || selected.size === 0}>
+              {saving
+                ? <Spinner label={dataset ? "Adding scripts…" : "Creating dataset…"} />
+                : dataset
+                  ? `Add ${selected.size} scripts to dataset`
+                  : `Create dataset with ${selected.size} scripts`}
             </button>
-            <button className="btn ghost" onClick={generate} disabled={busy}>↺ Regenerate</button>
+            <button className="btn ghost" onClick={generate} disabled={busy || saving}>↺ Regenerate</button>
           </div>
         </>
       )}
