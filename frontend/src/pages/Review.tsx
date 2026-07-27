@@ -145,7 +145,11 @@ function ReviewRow({
     setError("");
     try {
       const body =
-        action === "accept" ? { final_text: finalText, note } : action === "reject" ? { note } : undefined;
+        action === "accept"
+          ? { final_text: finalText, note, force: rec.qc_status === "failed" }
+          : action === "reject"
+            ? { note }
+            : undefined;
       const updated = await post<Recording>(`/api/recordings/${rec.id}/${action}`, body);
       onUpdate(updated);
     } catch (e) {
@@ -166,6 +170,7 @@ function ReviewRow({
         </div>
         <div className="row gap">
           <QcChip status={rec.qc_status} />
+          {rec.forced_save && <Chip tone="warn">saved anyway</Chip>}
           <AsrChip status={rec.asr_status} />
           <HumanChip status={rec.human_status} />
           <span className="muted">{open ? "▾" : "▸"}</span>
@@ -183,6 +188,12 @@ function ReviewRow({
           )}
           <audio controls src={mediaUrl(`/api/recordings/${rec.id}/audio`)} className="player" preload="none" />
           <QcPanel rec={rec} />
+          {rec.forced_save && (
+            <div className="banner warn small">
+              The recorder explicitly saved this take despite failed automatic QC. Listen before
+              keeping it in the corpus.
+            </div>
+          )}
           <label className="muted small">
             Final training transcript (edit only if the accepted take deviates from the script):
           </label>
@@ -207,7 +218,7 @@ function ReviewRow({
           {error && <div className="banner error">{error}</div>}
           <div className="row gap action-row">
             <button className="btn accept" disabled={busy} onClick={() => act("accept")}>
-              ✓ Accept
+              {rec.qc_status === "failed" ? "✓ Accept as usable" : "✓ Accept"}
             </button>
             <button className="btn danger" disabled={busy} onClick={() => act("reject")}>
               ✗ Reject

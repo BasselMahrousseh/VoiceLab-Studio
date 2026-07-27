@@ -511,6 +511,62 @@ def test_guarded_user_and_dataset_deletion():
         assert client.delete(f"/api/datasets/{default_dataset['id']}").status_code == 400
 
 
+def test_failed_qc_requires_explicit_save_anyway_and_exports_override():
+    with TestClient(app) as client:
+        _login(client)
+        dataset = client.post(
+            "/api/datasets",
+            json={"name": "Forced Save Test", "languages": ["en-US"]},
+        ).json()
+        added = client.post(
+            f"/api/datasets/{dataset['id']}/scripts",
+            json={
+                "text": "Please confirm that the forced save workflow is traceable.",
+                "language": "en-US",
+            },
+        ).json()
+        assert added["imported"] == 1
+        script = client.get(
+            f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+        ).json()["items"][0]
+        speaker = client.get("/api/speakers").json()[0]
+        session = client.post(
+            "/api/sessions/start",
+            json={"speaker_id": speaker["id"], "device_info": {"test": True}},
+        ).json()
+        recording = client.post(
+            "/api/recordings",
+            data={"script_pk": script["id"], "session_id": session["id"]},
+            files={
+                "file": (
+                    "short.wav",
+                    wav_bytes(synth_speech(duration=0.5, lead=0.05, trail=0.05)),
+                    "audio/wav",
+                )
+            },
+        ).json()
+        assert recording["qc_status"] == "failed"
+        assert recording["forced_save"] is False
+
+        blocked = client.post(f"/api/recordings/{recording['id']}/accept", json={})
+        assert blocked.status_code == 409
+        forced = client.post(
+            f"/api/recordings/{recording['id']}/accept",
+            json={"force": True, "note": "Listened to the full take."},
+        )
+        assert forced.status_code == 200
+        assert forced.json()["human_status"] == "accepted"
+        assert forced.json()["forced_save"] is True
+        assert "Saved anyway" in forced.json()["review_note"]
+
+        exported = client.post(
+            "/api/exports",
+            json={"name": "forced-save-export", "dataset_id": dataset["id"]},
+        ).json()
+        assert exported["file_count"] == 1
+        assert client.delete(f"/api/datasets/{dataset['id']}").status_code == 200
+
+
 def test_generation_stream_emits_candidates_incrementally(monkeypatch):
     settings = get_settings().model_copy(
         update={

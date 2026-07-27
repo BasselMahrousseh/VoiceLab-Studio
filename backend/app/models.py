@@ -205,6 +205,9 @@ class Recording(Base):
 
     human_status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
     review_note: Mapped[str] = mapped_column(Text, default="")
+    # True when a human explicitly overrides a failed automatic QC result.
+    # The original qc_status/issues remain unchanged for auditability.
+    forced_save: Mapped[bool] = mapped_column(Boolean, default=False)
     # Transcript exported with this audio. Defaults to the script's training
     # text at accept time; reviewers may adjust it to match what was spoken.
     final_text: Mapped[str | None] = mapped_column(Text, nullable=True)

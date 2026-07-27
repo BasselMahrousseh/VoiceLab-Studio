@@ -4,7 +4,7 @@ A scripted **multilingual voice-recording and dataset-quality platform** for
 building high-quality Arabic, English, and code-switched audio-text pairs for
 TTS / voice-cloning fine-tuning, with first-class Emirati dialect governance.
 
-Current application version: **0.3.0**.
+Current application version: **0.3.1**.
 
 Core pipeline:
 
@@ -47,6 +47,10 @@ Lifecycle controls:
   metadata, and stored audio.
 - Administrators can delete other user accounts. Historical speaker and
   recording identity is preserved for corpus traceability.
+- Recorders can skip a sentence and return to it later. If automatic QC
+  produces a false failure, **Save anyway** records an explicit human override,
+  keeps the original QC evidence, advances recorder progress, and surfaces the
+  take in Review.
 
 ## Quick start
 

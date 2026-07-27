@@ -125,6 +125,7 @@ export interface Recording {
   };
   human_status: "pending" | "accepted" | "rejected";
   review_note: string;
+  forced_save: boolean;
   final_text: string | null;
   text_edited: boolean;
   created_at: string;

@@ -147,11 +147,12 @@ export default function Studio({
     }
   }, [script, session, autoAsr, status, loadSession]);
 
-  const accept = useCallback(async () => {
+  const accept = useCallback(async (force = false) => {
     if (!rec) return;
     try {
       await post<Recording>(`/api/recordings/${rec.id}/accept`, {
         final_text: editText !== null ? editText : undefined,
+        force,
       });
       setPhase("ready");
       setTake(null);
@@ -193,7 +194,12 @@ export default function Studio({
         e.preventDefault();
         if (phaseRef.current === "ready") void startRecording();
         else if (phaseRef.current === "recording") void stopRecording();
-      } else if (e.key === "Enter" && phaseRef.current === "review" && rec) {
+      } else if (
+        e.key === "Enter" &&
+        phaseRef.current === "review" &&
+        rec &&
+        rec.qc_status !== "failed"
+      ) {
         e.preventDefault();
         void accept();
       } else if ((e.key === "r" || e.key === "R") && phaseRef.current === "review") {
@@ -384,6 +390,11 @@ export default function Studio({
                 {verifying && <Spinner label="ASR verifying…" />}
               </div>
               <QcPanel rec={rec} />
+              {rec.forced_save && (
+                <div className="banner warn small">
+                  This take was saved with a human override despite failed automatic QC.
+                </div>
+              )}
               <div className="edit-block">
                 <button
                   className="link-btn"
@@ -402,10 +413,15 @@ export default function Studio({
                 )}
               </div>
               <div className="row gap action-row">
-                <button className="btn accept" onClick={accept} disabled={rec.qc_status === "failed"}
-                  title={rec.qc_status === "failed" ? "QC failed - re-record (or accept from Review page)" : ""}>
-                  ✓ Accept {editText !== null && "with edit"} <kbd>Enter</kbd>
-                </button>
+                {rec.qc_status === "failed" ? (
+                  <button className="btn danger" onClick={() => accept(true)}>
+                    ✓ Save anyway {editText !== null && "with edit"}
+                  </button>
+                ) : (
+                  <button className="btn accept" onClick={() => accept(false)}>
+                    ✓ Accept {editText !== null && "with edit"} <kbd>Enter</kbd>
+                  </button>
+                )}
                 <button className="btn" onClick={rerecord}>
                   ↺ Re-record <kbd>R</kbd>
                 </button>

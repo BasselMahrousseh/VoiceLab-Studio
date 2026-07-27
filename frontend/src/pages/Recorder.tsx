@@ -101,10 +101,10 @@ export default function Recorder() {
     }
   }, [script, ctx]);
 
-  const save = useCallback(async () => {
+  const save = useCallback(async (force = false) => {
     if (!rec) return;
     try {
-      await post(`/api/recordings/${rec.id}/accept`, {});
+      await post(`/api/recordings/${rec.id}/accept`, { force });
       resetTake();
       setPhase("ready");
       setElapsed(0);
@@ -123,7 +123,31 @@ export default function Recorder() {
     setElapsed(0);
   }, [rec, resetTake]);
 
-  // keyboard: Space = record/stop, Enter = save, R = restart
+  const skip = useCallback(async () => {
+    if (!script) return;
+    setError("");
+    if (rec) {
+      await post(`/api/recordings/${rec.id}/reject`, { note: "skipped by recorder" }).catch(
+        () => undefined
+      );
+    }
+    resetTake();
+    setPhase("ready");
+    setElapsed(0);
+    try {
+      const next = await get<Script | null>(`/api/recorder/next?exclude_id=${script.id}`);
+      if (next) {
+        setScript(next);
+      } else {
+        setScript(script);
+        setError("There are no other unrecorded sentences to skip to.");
+      }
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [script, rec, resetTake]);
+
+  // keyboard: Space = record/stop, Enter = save, R = restart, S = skip
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -137,11 +161,13 @@ export default function Recorder() {
         void save();
       } else if ((e.key === "r" || e.key === "R") && phaseRef.current === "review") {
         void restart();
+      } else if ((e.key === "s" || e.key === "S") && phaseRef.current !== "recording") {
+        void skip();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [startRecording, stopRecording, save, restart, rec]);
+  }, [startRecording, stopRecording, save, restart, skip, rec]);
 
   if (ctx === undefined) return <div className="app-loading"><Spinner label="Loading your session…" /></div>;
 
@@ -247,6 +273,11 @@ export default function Recorder() {
                         Press <kbd>Space</kbd> to {phase === "recording" ? "stop" : "start"}
                       </span>
                     </div>
+                    {phase === "ready" && (
+                      <button className="btn ghost" onClick={skip}>
+                        Skip sentence <kbd>S</kbd>
+                      </button>
+                    )}
                   </div>
                   <LevelMeter recorder={recorder.current} active={phase === "recording"} />
                   {phase === "processing" && <Spinner label="Processing…" />}
@@ -259,8 +290,8 @@ export default function Recorder() {
                   <audio controls src={takeUrl} className="player" />
                   {qcFailed && (
                     <div className="banner error">
-                      This take looks too short or too quiet. Please press <b>Restart</b> and read it
-                      again.
+                      This take failed an automatic quality check. Listen to it first: restart if
+                      the issue is real, or use <b>Save anyway</b> if the recording is actually good.
                     </div>
                   )}
                   {qcWarn && !qcFailed && (
@@ -270,11 +301,20 @@ export default function Recorder() {
                     </div>
                   )}
                   <div className="row gap action-row">
-                    <button className="btn accept big" onClick={save} disabled={qcFailed}>
-                      ✓ Save &amp; next <kbd>Enter</kbd>
-                    </button>
+                    {qcFailed ? (
+                      <button className="btn danger big" onClick={() => save(true)}>
+                        ✓ Save anyway &amp; next
+                      </button>
+                    ) : (
+                      <button className="btn accept big" onClick={() => save(false)}>
+                        ✓ Save &amp; next <kbd>Enter</kbd>
+                      </button>
+                    )}
                     <button className="btn big" onClick={restart}>
                       ↺ Restart <kbd>R</kbd>
+                    </button>
+                    <button className="btn ghost big" onClick={skip}>
+                      Skip <kbd>S</kbd>
                     </button>
                   </div>
                 </div>

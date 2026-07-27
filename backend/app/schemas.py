@@ -259,6 +259,7 @@ class RecordingOut(ORMModel):
     asr_detail: dict
     human_status: str
     review_note: str
+    forced_save: bool = False
     final_text: str | None
     text_edited: bool
     created_at: datetime
@@ -269,6 +270,7 @@ class RecordingOut(ORMModel):
 class AcceptIn(BaseModel):
     final_text: str | None = None  # reviewer-approved transcript override
     note: str = ""
+    force: bool = False
 
 
 class RejectIn(BaseModel):

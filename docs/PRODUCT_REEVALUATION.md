@@ -53,6 +53,12 @@ must retain dataset ownership.
 - User deletion requires typing the username. Administrators cannot delete
   their own account. Deleting a recorder removes login access but preserves the
   speaker and recording identity used by historical corpus records.
+- Recorder and admin-assisted Studio views support **Skip** without changing
+  dataset progress. A skipped sentence returns to the queue after other work.
+- A failed automatic QC result requires re-recording or an explicit **Save
+  anyway** override. Forced saves keep `qc_status=failed`, store
+  `forced_save=true`, remain visible in Review, and carry that marker into
+  exports rather than silently disguising the failure as a pass.
 
 ## Recommended next priorities
 

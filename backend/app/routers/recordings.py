@@ -185,9 +185,18 @@ def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_d
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
+    if r.qc_status == "failed" and not payload.force:
+        raise HTTPException(
+            409,
+            "Automatic QC failed. Re-record this take or explicitly use Save anyway.",
+        )
     r.human_status = "accepted"
     r.reviewed_at = datetime.now(timezone.utc)
-    r.review_note = payload.note
+    r.forced_save = r.qc_status == "failed" and payload.force
+    forced_note = "Saved anyway despite failed automatic QC."
+    r.review_note = (
+        f"{forced_note} {payload.note}".strip() if r.forced_save else payload.note
+    )
     if payload.final_text is not None and payload.final_text.strip() != r.script.training_text:
         r.final_text = payload.final_text.strip()
         r.text_edited = True

@@ -72,7 +72,7 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
     # here are thousands of rows, not millions).
     out: list[Recording] = []
     for r in recordings:
-        if r.qc_status == "failed":
+        if r.qc_status == "failed" and not r.forced_save:
             continue
         if r.qc_status == "warning" and not include_qc_warning:
             continue
@@ -145,6 +145,7 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
                     "session_id": rec.session_id,
                     "take_number": rec.take_number,
                     "text_edited": rec.text_edited,
+                    "forced_save": rec.forced_save,
                     "qc_status": rec.qc_status,
                     "asr_status": rec.asr_status,
                     "asr_cer": rec.asr_cer,

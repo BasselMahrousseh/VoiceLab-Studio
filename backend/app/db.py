@@ -47,6 +47,7 @@ def _migrate_sqlite() -> None:
 
     wanted = {
         "scripts": [("dataset_id", "INTEGER")],
+        "recordings": [("forced_save", "BOOLEAN DEFAULT 0")],
         "datasets": [
             ("target_sample_count", "INTEGER DEFAULT 0"),
             ("target_avg_duration_sec", "REAL DEFAULT 0"),
