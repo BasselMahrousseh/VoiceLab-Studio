@@ -26,10 +26,7 @@ export default function Login() {
     <div className="login-screen">
       <form className="login-card fade-in" onSubmit={submit}>
         <div className="login-brand">
-          <Logo height={52} />
-          <div className="login-title">
-            <b>Lahja</b> Studio
-          </div>
+          <Logo height={92} />
           <div className="muted small">Emirati voice dataset recording</div>
         </div>
         <label className="field">

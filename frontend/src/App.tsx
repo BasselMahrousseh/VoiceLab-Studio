@@ -21,7 +21,7 @@ export default function App() {
   if (loading) {
     return (
       <div className="app-loading">
-        <Logo height={44} />
+        <Logo height={72} />
         <Spinner label="Loading e& Lahja Studio…" />
       </div>
     );
@@ -56,10 +56,7 @@ function AdminShell() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <Logo height={30} />
-          <span className="brand-name">
-            <b>Lahja</b> Studio
-          </span>
+          <Logo height={54} />
         </div>
         <nav>
           <NavLink to="/datasets">📁 Datasets</NavLink>

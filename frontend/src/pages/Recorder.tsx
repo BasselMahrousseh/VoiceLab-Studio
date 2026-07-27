@@ -154,10 +154,7 @@ export default function Recorder() {
     <div className="recorder-shell">
       <header className="recorder-top">
         <div className="row gap">
-          <Logo height={26} />
-          <span className="brand-name">
-            <b>Lahja</b> Studio
-          </span>
+          <Logo height={40} />
         </div>
         <div className="row gap">
           {ctx?.dataset && <span className="chip accent">{ctx.dataset.name}</span>}
