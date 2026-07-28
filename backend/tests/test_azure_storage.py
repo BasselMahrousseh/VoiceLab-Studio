@@ -56,7 +56,8 @@ def test_blob_master_and_export_round_trip(tmp_path, monkeypatch):
     fake = FakeContainer()
     monkeypatch.setattr(storage, "_container", lambda _settings: fake)
 
-    rel = storage.take_rel_path("speaker_001", "AE_001", 1)
+    rel = storage.take_rel_path("speaker_001", "Emirati Support Pilot", "AE_001", 1)
+    assert rel == "speaker_001/Emirati Support Pilot/AE_001_take_01.wav"
     storage.save_master(settings, rel, b"wav")
     assert fake.blobs[f"audio/{rel}"] == b"wav"
     assert storage.read_master(settings, rel) == b"wav"

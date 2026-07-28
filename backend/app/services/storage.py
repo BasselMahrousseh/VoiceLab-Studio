@@ -1,13 +1,14 @@
 """Recording and export storage.
 
-Layout: data/audio/{speaker_key}/{script_id}/take_{n:02d}.wav
+Layout: data/audio/{user}/{dataset_title}/{script_id}_take_{n:02d}.wav
 Azure layout inside the configured container:
-  audio/{speaker_key}/{script_id}/take_{n:02d}.wav
+  audio/{user}/{dataset_title}/{script_id}_take_{n:02d}.wav
   exports/{batch_slug}/...
   database-backups/voicelab_{timestamp}.db
 """
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Iterator
@@ -20,6 +21,13 @@ def _safe_rel_path(rel_path: str) -> str:
     if not normalized or any(part in ("", ".", "..") for part in normalized.split("/")):
         raise ValueError("Invalid storage path")
     return normalized
+
+
+def _safe_folder(name: str, fallback: str = "unknown") -> str:
+    """Make a single path segment safe for local disks and Azure Blob folders."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", (name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or fallback
 
 
 def _blob_name(prefix: str, rel_path: str) -> str:
@@ -55,8 +63,17 @@ def _container(settings: Settings):
     )
 
 
-def take_rel_path(speaker_key: str, script_id: str, take_number: int) -> str:
-    return f"{speaker_key}/{script_id}/take_{take_number:02d}.wav"
+def take_rel_path(
+    speaker_key: str,
+    dataset_title: str,
+    script_id: str,
+    take_number: int,
+) -> str:
+    """Build master path: {user}/{dataset title}/{script_id}_take_NN.wav."""
+    user = _safe_folder(speaker_key, fallback="speaker")
+    dataset = _safe_folder(dataset_title, fallback="dataset")
+    script = _safe_folder(script_id, fallback="script")
+    return f"{user}/{dataset}/{script}_take_{take_number:02d}.wav"
 
 
 def abs_audio_path(settings: Settings, rel_path: str) -> Path:
@@ -116,7 +133,7 @@ def delete_master(settings: Settings, rel_path: str) -> None:
 
     path = abs_audio_path(settings, rel_path)
     path.unlink(missing_ok=True)
-    # Recording paths are data/audio/{speaker}/{script}/take.wav. Remove only
+    # Recording paths are data/audio/{user}/{dataset}/file.wav. Remove only
     # now-empty parents and never walk above the configured audio directory.
     audio_root = settings.audio_dir.resolve()
     parent = path.parent

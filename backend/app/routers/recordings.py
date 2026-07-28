@@ -63,7 +63,13 @@ def upload_recording(
         db.query(func.count(Recording.id)).filter(Recording.script_pk == script_pk).scalar()
         + 1
     )
-    rel_path = storage.take_rel_path(session.speaker.speaker_key, script.script_id, take_number)
+    dataset_title = script.dataset.name if script.dataset else "unassigned"
+    rel_path = storage.take_rel_path(
+        session.speaker.speaker_key,
+        dataset_title,
+        script.script_id,
+        take_number,
+    )
     storage.save_master(settings, rel_path, content)
 
     qc = analyze_recording(audio, settings, raw_bytes=content)
