@@ -588,14 +588,12 @@ function DatasetDetail({
           <b>Delete dataset</b>
           <div className="muted small">
             Permanently removes its scripts, recording metadata, and stored audio.
+            {dataset.slug === "default"
+              ? " An empty Default dataset is recreated on the next app restart."
+              : ""}
           </div>
         </div>
-        <button
-          className="btn danger small"
-          onClick={onDelete}
-          disabled={dataset.slug === "default"}
-          title={dataset.slug === "default" ? "The Default dataset is required by the application" : ""}
-        >
+        <button className="btn danger small" onClick={onDelete}>
           Delete dataset
         </button>
       </div>
@@ -640,12 +638,20 @@ function DeleteDatasetModal({
     }
   };
 
+  const isPrimary = dataset.slug === "default";
+
   return (
     <Modal title={`Delete dataset — ${dataset.name}`} onClose={onClose}>
       <div className="banner error">
         This permanently deletes all {dataset.script_count} scripts, recording metadata, and stored
         audio in this dataset. This cannot be undone.
       </div>
+      {isPrimary && (
+        <div className="banner warn">
+          This is the primary Default dataset. Deleting it removes its corpus data now; an empty
+          Default dataset is recreated automatically on the next app restart.
+        </div>
+      )}
       {dataset.recorder_count > 0 && (
         <div className="banner warn">
           Move or delete the {dataset.recorder_count} assigned recorder account(s) first.
@@ -669,7 +675,13 @@ function DeleteDatasetModal({
           disabled={busy || dataset.recorder_count > 0 || confirmation !== dataset.name}
           onClick={submit}
         >
-          {busy ? <Spinner label="Deleting…" /> : "Permanently delete dataset"}
+          {busy ? (
+            <Spinner label="Deleting…" />
+          ) : isPrimary ? (
+            "Permanently delete primary dataset"
+          ) : (
+            "Permanently delete dataset"
+          )}
         </button>
         <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
       </div>

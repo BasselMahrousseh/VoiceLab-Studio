@@ -535,7 +535,10 @@ def test_guarded_user_and_dataset_deletion():
         default_dataset = next(
             item for item in client.get("/api/datasets").json() if item["slug"] == "default"
         )
-        assert client.delete(f"/api/datasets/{default_dataset['id']}").status_code == 400
+        deleted_default = client.delete(f"/api/datasets/{default_dataset['id']}")
+        assert deleted_default.status_code == 200
+        assert deleted_default.json()["deleted"] is True
+        assert client.get(f"/api/datasets/{default_dataset['id']}").status_code == 404
 
 
 def test_failed_qc_requires_explicit_save_anyway_and_exports_override():

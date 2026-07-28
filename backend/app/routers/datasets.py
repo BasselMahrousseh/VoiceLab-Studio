@@ -151,8 +151,6 @@ def delete_dataset(
     ds = db.get(Dataset, dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    if ds.slug == "default":
-        raise HTTPException(400, "The Default dataset is required by the application and cannot be deleted")
 
     assigned_users = (
         db.query(func.count(User.id)).filter(User.dataset_id == dataset_id).scalar() or 0
