@@ -69,7 +69,7 @@ def test_language_tagging_for_arabic_english_and_mixed():
     batch_hashes: set[str] = set()
 
     arabic = validate_item(
-        {"display_text": "مرحبا بكم في eLife", "language": "auto"},
+        {"display_text": "مرحبا بكم في الاستوديو", "language": "auto"},
         existing_hashes,
         existing_texts,
         batch_hashes,
@@ -86,12 +86,20 @@ def test_language_tagging_for_arabic_english_and_mixed():
         existing_texts,
         batch_hashes,
     )["computed"]
+    brand_mixed = validate_item(
+        {"display_text": "مرحبا بكم في eLife", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
 
     assert (arabic["language"], arabic["dialect"]) == ("ar-AE", "emirati")
     assert (english["language"], english["dialect"]) == ("en-US", "english")
     assert (mixed["language"], mixed["dialect"]) == ("mixed", "mixed")
+    assert (brand_mixed["language"], brand_mixed["dialect"]) == ("mixed", "mixed")
     assert "language:en-US" in english["tags"]
     assert {"language:mixed", "code_switch"}.issubset(mixed["tags"])
+    assert {"language:mixed", "code_switch"}.issubset(brand_mixed["tags"])
 
 
 def test_arabic_tag_rejects_latin_script_and_code_switching():
