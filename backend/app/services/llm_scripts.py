@@ -15,30 +15,74 @@ from ..config import Settings
 from ..models import DIALECTS, DOMAINS, LANGUAGES, STYLES
 from . import text_normalize as tn
 
-SYSTEM_PROMPT = """You are a professional voice-dataset script writer. Create natural,
-recordable utterances for high-quality speech model training. The requested
-dataset may contain Arabic, English, or intentionally code-switched sentences.
+SYSTEM_PROMPT = """You write recordable contact-center utterances for e& UAE voice
+datasets (ASR/TTS training). Each item is one natural spoken turn a human will
+read aloud — customer or agent — from a real telecom conversation.
 
-قواعد إلزامية / mandatory rules:
-1. اكتب باللهجة الإماراتية الأصيلة (أبوظبي/دبي/الشارقة) عندما يكون المطلوب "emirati": استخدم مفردات مثل: شو، وايد، عيل، تبا/تبغي، جذي، الحين، يالس، شحالك، مب، عسب، يوم (بمعنى لما)... تجنّب مفردات لهجات أخرى (مصرية، شامية، سعودية نجدية) إلا إذا طُلبت.
-2. لا تحوّل الجمل الإماراتية إلى فصحى. النص يُكتب كما يُنطق تماماً.
-3. English sentences must sound natural to a fluent speaker. Do not translate
-   an English request into Arabic or an Arabic request into English.
-4. الجمل يجب أن تكون طبيعية وقابلة للقراءة بنفس واحد، مناسبة للتسجيل الصوتي.
-5. لكل جملة أعطِ حقلين للنص:
-   - display_text: ما يُعرض على القارئ (يمكن أن يحتوي أرقاماً مثل 24 أو كلمات إنجليزية مثل SIM).
-   - training_text: exact spoken form. Write numbers as words in the sentence's
-     spoken language. If no verbalization change is needed, copy display_text.
-6. عند طلب code-switching: ادمج كلمات إنجليزية شائعة في كلام الإماراتيين (باقة، داتا، نت، رصيد مع: package, data, roaming, offer, app, SIM, upgrade...) بشكل طبيعي غير متكلف.
-7. Set language on every item: "ar-AE" for Arabic, "en-US" for English, or
-   "mixed" only when both languages are intentionally spoken in one sentence.
-8. Set dialect to "emirati"/"msa" for Arabic, "english" for English, and
-   "mixed" for a code-switched sentence.
-9. لا تكرر الصيغ ولا القوالب. كل جملة مختلفة فعلاً في التركيب والموضوع.
+Generation distribution:
+Approximately 75% of the batch should be realistic telecom and customer-service
+speech. Approximately 25% should be natural everyday Emirati speech unrelated
+to telecom, such as greetings, family, friends, work, school, university,
+shopping, restaurants, coffee, weather, traffic, driving, hobbies, sports,
+travel, appointments, daily routines, health, celebrations, directions, and
+polite social conversation. These non-telecom items must still sound authentic,
+recordable, and natural for UAE speakers.
 
-أعد النتيجة بصيغة JSON فقط بدون أي نص آخر:
+Domain (distribute across the batch; do not collapse into one scenario):
+Customer care, billing & invoices, payments, VAT, technical support, mobile
+data, voice calls, SMS, SIM/eSIM, roaming, internet, eLife, WiFi, router,
+fiber, sales, offers/promotions, upgrades/downgrades, renewals, activation,
+cancellation, complaints, service requests, account management, identity
+verification, OTP, delivery/installation appointments, network coverage,
+signal issues, slow internet, mobile-app support, and digital self-service.
+
+Real-world scenario coverage:
+Distribute generated utterances across realistic telecom situations rather than
+generic requests only. Cover scenarios such as paying or checking a bill,
+remaining balance, topping up credit, activating or cancelling a package,
+upgrading or downgrading plans, eLife installation appointments, router or
+WiFi troubleshooting, slow internet complaints, mobile data not working, SIM
+or eSIM activation, roaming before travel, OTP or identity verification,
+delivery scheduling, changing account information, reporting outages, 5G
+coverage questions, Freedom plan questions, e& UAE App assistance, E&Money
+transactions, VAT questions, payment confirmation, sales inquiries,
+promotional offers, service cancellation, complaint handling, follow-up after
+support, thanking the customer, and apologizing for inconvenience. Generate
+scenes from both the customer and the agent perspective.
+
+Utterance mix (balance; avoid request-only batches):
+questions, statements, confirmations, greetings, complaints, acknowledgements,
+agent responses, customer responses, polite exchanges, and short troubleshooting
+guidance. Vary who is speaking and what they are doing.
+
+Lexical & structural diversity:
+Vary openings, verbs, and sentence shapes. No repeated templates or near-paraphrases
+of the same line. In larger batches (about 30–100), spread topics and intents;
+do not cluster on one journey.
+
+Approved telecom terms (use naturally when relevant; never force into every line):
+e&, eLife, e& UAE App, E&Money, Freedom, Freedom Life, 5G, WiFi, Fiber, SIM,
+eSIM, roaming, package, data, recharge, balance, invoice, VAT. Prefer official
+spellings from the request's brand list when one is provided.
+
+Language behavior:
+- When dialect is emirati: authentic UAE Emirati as spoken (Abu Dhabi/Dubai/
+  Sharjah). Do not rewrite into MSA or other Arabic dialects.
+- English must sound native and stay English when English is requested.
+- Code-switch only when asked or when mixed language is in scope — natural
+  contact-center mixing, not forced.
+
+Recordability:
+One complete breath-sized utterance per item. Tag every item with language
+(ar-AE | en-US | mixed) and dialect (emirati | msa | english | mixed). Provide
+display_text and training_text; if they need no change, make them identical.
+Follow the administrator text policy appended after this message for orthography,
+numbers, brands, and transcript formatting.
+
+JSON only — no prose outside the object:
 {"items": [{"display_text": "...", "training_text": "...", "msa_equivalent": null, "language": "ar-AE", "style": "...", "domain": "...", "dialect": "...", "tags": ["..."], "note": ""}]}
 """
+
 
 COVERAGE_HINTS = {
     "numbers": "أرقام وكميات (فواتير، جيجابايت، دقائق، نسب مئوية)",
@@ -52,7 +96,7 @@ COVERAGE_HINTS = {
 
 def build_user_prompt(params: dict, settings: Settings) -> str:
     count = int(params.get("count", 20))
-    styles = params.get("styles") or ["neutral", "friendly"]
+    styles = params.get("styles") or ["neutral"]
     domains = params.get("domains") or ["customer_support"]
     languages = params.get("languages") or ["ar-AE"]
     dialect = params.get("dialect") or "emirati"
@@ -85,6 +129,18 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
         lines.append(f"أسماء العلامات/المصطلحات المسموح استخدامها: {brands}")
     if topics:
         lines.append(f"مواضيع أو سيناريوهات مقترحة: {topics}")
+    if languages == ["ar-AE"]:
+        lines.extend([
+            "مهم جداً: كل جملة موسومة ar-AE يجب أن تكون عربية بالكامل.",
+            "ممنوع أي كلمات إنجليزية أو أحرف لاتينية أو code-switching داخل جمل ar-AE.",
+            "إذا احتاج المعنى كلمة إنجليزية أو اسم منتج غير معرّب، لا تضعها ضمن ar-AE بل اعتبرها mixed.",
+            "استخدم فقط أسماء المنتجات أو المصطلحات إذا كانت لها صيغة عربية طبيعية ومكتوبة بالعربية.",
+        ])
+    elif "ar-AE" in languages:
+        lines.extend([
+            "أي عنصر موسوم ar-AE يجب أن يكون عربياً بالكامل بلا أحرف لاتينية.",
+            "أي عنصر يحتوي إنجليزية أو أسماء منتجات لاتينية يجب وسمه mixed وليس ar-AE.",
+        ])
     lines.append(
         "Return JSON only. Tag every item with language. Numbers in training_text "
         "must be written as spoken words in that item's language."
@@ -242,10 +298,6 @@ def detect_language(text: str) -> str:
     has_arabic = bool(re.search(r"[\u0600-\u06ff]", text))
     has_latin = tn.has_latin(text)
     if has_arabic and has_latin:
-        latin_tokens = {token.lower() for token in re.findall(r"[A-Za-z]+", text)}
-        brand_or_acronym_tokens = {"e", "du", "elife", "sim", "vat", "wifi", "sms", "otp"}
-        if latin_tokens and latin_tokens.issubset(brand_or_acronym_tokens):
-            return "ar-AE"
         return "mixed"
     if has_latin:
         return "en-US"
@@ -265,8 +317,9 @@ def validate_item(
     display = (item.get("display_text") or "").strip()
     training = (item.get("training_text") or display).strip()
     requested_language = (item.get("language") or "auto").strip()
+    detected_language = detect_language(training or display)
     language = (
-        detect_language(training or display)
+        detected_language
         if requested_language == "auto" or requested_language not in LANGUAGES
         else requested_language
     )
@@ -282,6 +335,12 @@ def validate_item(
         bad = set(_ALLOWED_RE.findall(display + " " + training))
         if bad:
             errors.append(f"disallowed characters: {' '.join(sorted(bad))}")
+        if requested_language == "ar-AE" and (
+            tn.has_latin(display) or tn.has_latin(training) or detected_language != "ar-AE"
+        ):
+            errors.append("ar-AE items must be fully Arabic with no English words, Latin script, or code-switching")
+        if requested_language == "en-US" and detected_language != "en-US":
+            errors.append("en-US items must be fully English with no Arabic script")
         if language == "ar-AE" and tn.arabic_ratio(training) < 0.5:
             warnings.append("less than half the text is Arabic - check dialect/code-switch tag")
 

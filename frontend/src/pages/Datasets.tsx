@@ -18,6 +18,27 @@ const DEFAULT_INSTRUCTIONS = `• Record in a quiet room with no echo, fans, or 
 • If you stumble or mispronounce, just press Restart and read it again.
 • Leave a short beat of silence before you start and after you finish.`;
 
+const LANGUAGE_LABELS: Record<string, string> = {
+  "ar-AE": "Arabic",
+  "en-US": "English",
+  mixed: "Mixed",
+};
+
+const DIALECT_LABELS: Record<string, string> = {
+  emirati: "Emirati Arabic",
+  msa: "Modern Standard Arabic",
+  mixed: "Mixed Arabic + English",
+  english: "English",
+};
+
+function formatLanguage(value: string): string {
+  return LANGUAGE_LABELS[value] ?? value;
+}
+
+function formatDialect(value: string): string {
+  return DIALECT_LABELS[value] ?? value;
+}
+
 export default function Datasets({ status }: { status: AppStatus | null }) {
   const [items, setItems] = useState<Dataset[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -60,14 +81,17 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
           const pct = d.script_count ? Math.round((d.accepted_count / d.script_count) * 100) : 0;
           return (
             <article key={d.id} className="ds-card lift">
-              <div className="row spread">
-                <h3>{d.name}</h3>
+              <div className="row spread ds-card-head">
+                <div className="ds-card-title">
+                  <h3>{d.name}</h3>
+                  <div className="muted small">{formatDialect(d.dialect)}</div>
+                </div>
                 <span className={`chip ${d.status === "active" ? "ok" : "off"}`}>{d.status}</span>
               </div>
               {d.description && <p className="muted small ds-desc">{d.description}</p>}
-              <div className="row gap wrap" style={{ marginBottom: 8 }}>
+              <div className="row gap wrap ds-card-meta">
                 {(d.languages?.length ? d.languages : [d.language]).map((language) => (
-                  <span key={language} className="chip accent">{language}</span>
+                  <span key={language} className="chip accent">{formatLanguage(language)}</span>
                 ))}
               </div>
               <div className="progress-track thin">
@@ -88,11 +112,11 @@ export default function Datasets({ status }: { status: AppStatus | null }) {
                 )}
               </div>
               <div className="row gap ds-card-actions">
-                <button className="btn accent small grow" onClick={() => setOpenId(d.id)}>
+                <button className="btn accent ds-card-btn" onClick={() => setOpenId(d.id)}>
                   Open dataset
                 </button>
                 <button
-                  className="btn record small grow"
+                  className="btn subtle ds-card-btn"
                   onClick={() => {
                     setGenaiDatasetId(d.id);
                     setGenaiOpen(true);
@@ -225,22 +249,27 @@ function CreateDatasetModal({
           />
         </label>
         <label>
-          Arabic dialect
+          Dialect / variant
           <select className="input" value={form.dialect} onChange={(e) => setForm({ ...form, dialect: e.target.value })}>
             {(status?.enums.dialects ?? ["emirati", "msa", "mixed"]).map((d) => (
-              <option key={d}>{d}</option>
+              <option key={d}>{formatDialect(d)}</option>
             ))}
           </select>
         </label>
         <label className="span2">
           Languages allowed in this dataset
           <MultiSelect
-            options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
+            options={
+              (status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]).map((language) => ({
+                value: language,
+                label: formatLanguage(language),
+              }))
+            }
             value={form.languages}
             onChange={(languages) => setForm({ ...form, languages })}
           />
           <span className="muted small">
-            Every sentence receives its own language tag. Use “mixed” for sentences that intentionally code-switch.
+            Use `Arabic` for Arabic-only scripts, `English` for English-only scripts, and `Mixed` only when code-switching is intentional.
           </span>
         </label>
         <label className="span2">
@@ -425,9 +454,9 @@ function DatasetDetail({
   return (
     <Modal title={dataset.name} onClose={onClose} wide>
       <div className="detail-stats row gap wrap">
-        <span className="chip">{dataset.dialect}</span>
+        <span className="chip">{formatDialect(dataset.dialect)}</span>
         {(dataset.languages?.length ? dataset.languages : [dataset.language]).map((language) => (
-          <span key={language} className="chip accent">{language}</span>
+          <span key={language} className="chip accent">{formatLanguage(language)}</span>
         ))}
         <span className="chip">📜 {dataset.script_count} scripts</span>
         <span className="chip ok">✓ {dataset.accepted_count} accepted · {fmtHours(dataset.accepted_duration_sec)}</span>
@@ -449,7 +478,12 @@ function DatasetDetail({
       <label className="field-label">
         Languages allowed in this dataset
         <MultiSelect
-          options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
+          options={
+            (status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]).map((language) => ({
+              value: language,
+              label: formatLanguage(language),
+            }))
+          }
           value={languages}
           onChange={setLanguages}
         />

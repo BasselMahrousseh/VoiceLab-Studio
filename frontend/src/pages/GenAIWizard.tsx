@@ -10,7 +10,32 @@ const DEFAULT_INSTRUCTIONS = `• Record in a quiet room with no echo, fans, or 
 • If you stumble or mispronounce, just press Restart and read it again.
 • Leave a short beat of silence before you start and after you finish.`;
 
-const COVERAGE = ["numbers", "dates_times", "prices", "id_codes", "code_switch", "brands"];
+const LANGUAGE_OPTIONS = [
+  { value: "ar-AE", label: "Arabic", help: "Generate fully Arabic sentences only." },
+  { value: "en-US", label: "English", help: "Generate fully English sentences only." },
+  { value: "mixed", label: "Mixed", help: "Generate natural Arabic + English code-switched sentences." },
+] as const;
+
+const DIALECT_OPTIONS: Record<string, Array<{ value: string; label: string; help: string }>> = {
+  "ar-AE": [
+    { value: "emirati", label: "Emirati Arabic", help: "Natural UAE spoken Arabic." },
+    { value: "msa", label: "Modern Standard Arabic", help: "Formal Arabic without dialectal wording." },
+  ],
+  "en-US": [
+    { value: "english", label: "English", help: "Native English wording and phrasing." },
+  ],
+  mixed: [
+    { value: "mixed", label: "Mixed Arabic + English", help: "Natural code-switching when it sounds realistic." },
+  ],
+};
+
+function languageLabel(value: string): string {
+  return LANGUAGE_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
+function dialectOptionsFor(language: string) {
+  return DIALECT_OPTIONS[language] ?? DIALECT_OPTIONS["ar-AE"];
+}
 
 function fmtHours(sec: number): string {
   const h = sec / 3600;
@@ -34,14 +59,13 @@ export default function GenAIWizard({
     name: dataset?.name ?? "",
     description: dataset?.description ?? "",
     dialect: dataset?.dialect ?? "emirati",
-    languages: (dataset?.languages?.length ? dataset.languages : ["ar-AE"]) as string[],
+    languages: [dataset?.languages?.[0] ?? dataset?.language ?? "ar-AE"] as string[],
     text_policy: dataset?.text_policy ?? "",
     instructions: dataset?.instructions ?? DEFAULT_INSTRUCTIONS,
     target_sample_count: dataset?.target_sample_count || 200,
     avg_duration_sec: dataset?.target_avg_duration_sec || 6,
-    styles: ["neutral", "friendly"] as string[],
+    styles: ["neutral"] as string[],
     domains: ["customer_support"] as string[],
-    coverage: [] as string[],
     topics: "",
     brand_terms: "e&, du, eLife, 5G",
     generate_count: 30,
@@ -63,6 +87,15 @@ export default function GenAIWizard({
       .catch((e) => setError(e.message));
   }, []);
 
+  const selectedLanguage = plan.languages[0] ?? "ar-AE";
+  const dialectOptions = dialectOptionsFor(selectedLanguage);
+
+  useEffect(() => {
+    if (!dialectOptions.some((option) => option.value === plan.dialect)) {
+      setPlan((current) => ({ ...current, dialect: dialectOptions[0].value }));
+    }
+  }, [dialectOptions, plan.dialect]);
+
   const projected = useMemo(
     () => plan.target_sample_count * plan.avg_duration_sec,
     [plan.target_sample_count, plan.avg_duration_sec]
@@ -75,7 +108,6 @@ export default function GenAIWizard({
     plan.avg_duration_sec > 0 &&
     plan.generate_count > 0 &&
     plan.styles.length > 0 &&
-    plan.domains.length > 0 &&
     plan.languages.length > 0;
 
   const set = (patch: Partial<typeof plan>) => setPlan((p) => ({ ...p, ...patch }));
@@ -113,7 +145,6 @@ export default function GenAIWizard({
           languages: plan.languages,
           dialect: plan.dialect,
           policy_text: plan.text_policy,
-          coverage: plan.coverage,
           topics: plan.topics,
           brand_terms: plan.brand_terms,
           avg_duration_sec: plan.avg_duration_sec,
@@ -220,56 +251,100 @@ export default function GenAIWizard({
               scripts and recordings will not be changed.
             </div>
           )}
-          <div className="form-grid">
-            {!dataset && (
-              <label>
-                Dataset name
-                <input
-                  className="input"
-                  placeholder="Emirati Customer Support v1"
-                  value={plan.name}
-                  maxLength={200}
-                  required
-                  onChange={(e) => set({ name: e.target.value })}
-                />
-              </label>
-            )}
-            <label>
-              Arabic dialect
-              <select className="input" value={plan.dialect} onChange={(e) => set({ dialect: e.target.value })}>
-                {(status?.enums.dialects ?? ["emirati", "msa", "mixed"]).map((d) => (
-                  <option key={d}>{d}</option>
-                ))}
-              </select>
-            </label>
-            <label className="span2">
-              Languages to generate
-              <MultiSelect
-                options={status?.enums.languages ?? ["ar-AE", "en-US", "mixed"]}
-                value={plan.languages}
-                onChange={(languages) => set({ languages })}
-              />
-              <span className="muted small">
-                The model distributes records across these choices and every candidate receives a language tag.
-              </span>
-            </label>
-            {!dataset && (
-              <label className="span2">
-                Description (optional)
-                <input className="input" placeholder="Goal of this dataset" value={plan.description} onChange={(e) => set({ description: e.target.value })} />
-              </label>
-            )}
+          <div className="wizard-layout">
+            <section className="wizard-section">
+              <div className="wizard-section-head">
+                <h4>Dataset Information</h4>
+                <p className="muted small">Choose what type of dataset you want to create.</p>
+              </div>
+              <div className="form-grid">
+                {!dataset && (
+                  <label className="span2">
+                    Dataset name
+                    <input
+                      className="input"
+                      placeholder="Emirati Customer Support v1"
+                      value={plan.name}
+                      maxLength={200}
+                      required
+                      onChange={(e) => set({ name: e.target.value })}
+                    />
+                  </label>
+                )}
+                <div className="span2">
+                  <div className="field-label">
+                    Language
+                    <div className="selection-grid">
+                      {LANGUAGE_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`selection-card ${selectedLanguage === option.value ? "selected" : ""}`}
+                          onClick={() => set({ languages: [option.value] })}
+                        >
+                          <span className="selection-title">{option.label}</span>
+                          <span className="selection-help">{option.help}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <span className="muted small">
+                      {selectedLanguage === "ar-AE"
+                        ? "Arabic datasets stay fully in Arabic. Any sentence with English words belongs in Mixed instead."
+                        : selectedLanguage === "mixed"
+                          ? "Use Mixed when you want intentional Arabic-English code-switching."
+                          : "English datasets stay fully in English."}
+                    </span>
+                  </div>
+                </div>
+                <div className="span2">
+                  <div className="field-label">
+                    Dialect / Variant
+                    <div className="selection-grid">
+                      {dialectOptions.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`selection-card ${plan.dialect === option.value ? "selected" : ""}`}
+                          onClick={() => set({ dialect: option.value })}
+                        >
+                          <span className="selection-title">{option.label}</span>
+                          <span className="selection-help">{option.help}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+                {!dataset && (
+                  <label className="span2">
+                    Description (optional)
+                    <input className="input" placeholder="Goal of this dataset" value={plan.description} onChange={(e) => set({ description: e.target.value })} />
+                  </label>
+                )}
+              </div>
+            </section>
 
-            {!dataset && (
-              <label>
-                Target samples
-                <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Math.max(1, Number(e.target.value) || 1) })} />
-              </label>
-            )}
-            <label>
-              Avg. duration / clip (sec)
-              <input type="number" min={1} max={60} className="input" value={plan.avg_duration_sec} onChange={(e) => set({ avg_duration_sec: Math.min(60, Math.max(1, Number(e.target.value) || 1)) })} />
-            </label>
+            <section className="wizard-section">
+              <div className="wizard-section-head">
+                <h4>Generation Settings</h4>
+                <p className="muted small">Set the target volume and the first review batch.</p>
+              </div>
+              <div className="form-grid">
+                {!dataset && (
+                  <label>
+                    Target samples
+                    <input type="number" min={1} className="input" value={plan.target_sample_count} onChange={(e) => set({ target_sample_count: Math.max(1, Number(e.target.value) || 1) })} />
+                  </label>
+                )}
+                <label>
+                  Average duration per clip (sec)
+                  <input type="number" min={1} max={60} className="input" value={plan.avg_duration_sec} onChange={(e) => set({ avg_duration_sec: Math.min(60, Math.max(1, Number(e.target.value) || 1)) })} />
+                </label>
+                <label>
+                  Generate now (first batch)
+                  <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Math.max(1, Number(e.target.value) || 1)) })} />
+                </label>
+              </div>
+            </section>
           </div>
 
           {!dataset && <div className="plan-summary">
@@ -292,60 +367,75 @@ export default function GenAIWizard({
             </div>
           </div>}
 
-          <div className="form-grid">
-            <label className="span2">
-              Styles (voice tone — the model distributes across these)
-              <MultiSelect options={status?.enums.styles ?? []} value={plan.styles} onChange={(v) => set({ styles: v })} />
-            </label>
-            <label className="span2">
-              Domains (topics / context)
-              <MultiSelect options={status?.enums.domains ?? []} value={plan.domains} onChange={(v) => set({ domains: v })} />
-            </label>
-            <label className="span2">
-              Special coverage (make sure these appear)
-              <MultiSelect options={COVERAGE} value={plan.coverage} onChange={(v) => set({ coverage: v })} />
-            </label>
-            <label className="span2">
-              Brand / product terms allowed
-              <input className="input" value={plan.brand_terms} onChange={(e) => set({ brand_terms: e.target.value })} />
-            </label>
-            <label className="span2">
-              Topic seeds (optional)
-              <textarea className="input" dir="auto" rows={2} placeholder="تفعيل باقة، billing question, network coverage…" value={plan.topics} onChange={(e) => set({ topics: e.target.value })} />
-            </label>
-            {!dataset && (
-              <label className="span2">
-                Recording instructions (shown to recorders)
-                <textarea className="input" rows={5} value={plan.instructions} onChange={(e) => set({ instructions: e.target.value })} />
-              </label>
-            )}
-            <div className="span2">
-              <details className="policy-preview">
-                <summary>View global text policy applied to this generation</summary>
-                <pre className="policy-text">{globalPolicy || "Loading…"}</pre>
-              </details>
-            </div>
-            {!dataset ? (
-              <label className="span2">
-                Dataset-specific policy additions (optional)
-                <textarea
-                  className="input"
-                  rows={4}
-                  value={plan.text_policy}
-                  placeholder="Add terminology, pronunciation, casing, or prohibited-content rules."
-                  onChange={(event) => set({ text_policy: event.target.value })}
-                />
-              </label>
-            ) : plan.text_policy ? (
-              <div className="span2 banner info small">
-                <b>Dataset policy additions:</b>
-                <pre className="guide-text">{plan.text_policy}</pre>
+          <div className="wizard-layout">
+            <section className="wizard-section">
+              <div className="wizard-section-head">
+                <h4>AI Configuration</h4>
+                <p className="muted small">Guide the generator without overloading the workflow.</p>
               </div>
-            ) : null}
-            <label>
-              Generate now (first batch)
-              <input type="number" min={1} max={100} className="input" value={plan.generate_count} onChange={(e) => set({ generate_count: Math.min(100, Math.max(1, Number(e.target.value) || 1)) })} />
-            </label>
+              <div className="form-grid">
+                <label className="span2">
+                  Styles
+                  <MultiSelect options={["neutral"]} value={plan.styles} onChange={(v) => set({ styles: v })} />
+                  <span className="muted small">Neutral is the only style enabled for now.</span>
+                </label>
+                <label className="span2">
+                  Brand / Product Terms
+                  <input className="input" value={plan.brand_terms} onChange={(e) => set({ brand_terms: e.target.value })} />
+                </label>
+                <label className="span2">
+                  Topic Seeds (optional)
+                  <textarea className="input" dir="auto" rows={2} placeholder="Package activation, billing question, network coverage, roaming before travel…" value={plan.topics} onChange={(e) => set({ topics: e.target.value })} />
+                </label>
+              </div>
+            </section>
+
+            {!dataset && (
+              <section className="wizard-section">
+                <div className="wizard-section-head">
+                  <h4>Recording</h4>
+                  <p className="muted small">Instructions shown to recorders during collection.</p>
+                </div>
+                <div className="form-grid">
+                  <label className="span2">
+                    Recording instructions
+                    <textarea className="input" rows={5} value={plan.instructions} onChange={(e) => set({ instructions: e.target.value })} />
+                  </label>
+                </div>
+              </section>
+            )}
+
+            <section className="wizard-section">
+              <div className="wizard-section-head">
+                <h4>Advanced</h4>
+                <p className="muted small">Optional policy controls for dataset-specific rules.</p>
+              </div>
+              <div className="form-grid">
+                <div className="span2">
+                  <details className="policy-preview">
+                    <summary>View global text policy applied to this generation</summary>
+                    <pre className="policy-text">{globalPolicy || "Loading…"}</pre>
+                  </details>
+                </div>
+                {!dataset ? (
+                  <label className="span2">
+                    Dataset-specific policy
+                    <textarea
+                      className="input"
+                      rows={4}
+                      value={plan.text_policy}
+                      placeholder="Add terminology, pronunciation, casing, or prohibited-content rules."
+                      onChange={(event) => set({ text_policy: event.target.value })}
+                    />
+                  </label>
+                ) : plan.text_policy ? (
+                  <div className="span2 banner info small">
+                    <b>Dataset policy additions:</b>
+                    <pre className="guide-text">{plan.text_policy}</pre>
+                  </div>
+                ) : null}
+              </div>
+            </section>
           </div>
 
           {error && <div className="banner error">{error}</div>}
@@ -403,7 +493,8 @@ export default function GenAIWizard({
                       <div className="arabic muted small" dir="auto">{c.computed.training_text}</div>
                     )}
                     <div className="row gap wrap" style={{ marginTop: 4 }}>
-                      <Chip tone="accent">{c.computed.language}</Chip>
+                      <Chip tone="accent">{languageLabel(c.computed.language)}</Chip>
+                      <Chip>{c.computed.dialect}</Chip>
                       <Chip tone="accent">{c.computed.style}</Chip>
                       <Chip>{c.computed.domain}</Chip>
                       <Chip>{c.computed.length_bucket}</Chip>

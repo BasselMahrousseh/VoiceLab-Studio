@@ -82,24 +82,31 @@ export function MultiSelect({
   value,
   onChange,
 }: {
-  options: string[];
+  options: Array<string | { value: string; label: string }>;
   value: string[];
   onChange: (v: string[]) => void;
 }) {
   return (
     <div className="multi-select">
-      {options.map((o) => (
-        <label key={o} className={value.includes(o) ? "on" : ""}>
-          <input
-            type="checkbox"
-            checked={value.includes(o)}
-            onChange={(e) =>
-              onChange(e.target.checked ? [...value, o] : value.filter((v) => v !== o))
-            }
-          />
-          {o}
-        </label>
-      ))}
+      {options.map((option) => {
+        const normalized = typeof option === "string" ? { value: option, label: option } : option;
+        return (
+          <label key={normalized.value} className={value.includes(normalized.value) ? "on" : ""}>
+            <input
+              type="checkbox"
+              checked={value.includes(normalized.value)}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...value, normalized.value]
+                    : value.filter((v) => v !== normalized.value)
+                )
+              }
+            />
+            {normalized.label}
+          </label>
+        );
+      })}
     </div>
   );
 }

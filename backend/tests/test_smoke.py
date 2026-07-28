@@ -94,6 +94,25 @@ def test_language_tagging_for_arabic_english_and_mixed():
     assert {"language:mixed", "code_switch"}.issubset(mixed["tags"])
 
 
+def test_arabic_tag_rejects_latin_script_and_code_switching():
+    from app.services.llm_scripts import validate_item
+
+    result = validate_item(
+        {
+            "display_text": "أبغي أفعل data package",
+            "training_text": "أبغي أفعل data package",
+            "language": "ar-AE",
+            "dialect": "emirati",
+        },
+        set(),
+        [],
+        set(),
+    )
+
+    assert result["ok"] is False
+    assert any("fully Arabic" in error for error in result["errors"])
+
+
 # ---------------------------------------------------------------------------
 # audio QC
 # ---------------------------------------------------------------------------

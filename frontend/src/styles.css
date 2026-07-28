@@ -1022,13 +1022,89 @@ body.modal-open {
   box-shadow: var(--shadow-sm);
 }
 .recorder-progress {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 12px 22px 0;
+  padding: 18px 22px;
   max-width: 820px;
-  margin: 0 auto;
+  margin: 18px auto 0;
   width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.recorder-progress-head {
+  align-items: flex-start;
+  gap: 16px;
+}
+.recorder-progress-head h2 {
+  margin: 2px 0 0;
+  font-size: 24px;
+}
+.recorder-progress-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.recorder-progress-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.recorder-progress-main {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.recorder-progress-title {
+  font-size: 18px;
+  font-weight: 700;
+}
+.recorder-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.progress-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.progress-stat strong {
+  font-size: 18px;
+}
+.progress-stat-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.session-stats-card {
+  background: linear-gradient(180deg, #fff, #faf7f8);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.session-stats-head {
+  font-size: 13px;
+  font-weight: 700;
+}
+.session-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 14px;
+}
+.session-stats-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.session-stats-grid strong {
+  font-size: 17px;
 }
 .recorder-main {
   flex: 1;
@@ -1056,7 +1132,7 @@ body.modal-open {
 }
 .prompt-panel {
   text-align: center;
-  padding: 20px;
+  padding: 28px 28px 24px;
 }
 .prompt-label {
   text-transform: uppercase;
@@ -1064,34 +1140,157 @@ body.modal-open {
 }
 .prompt-text {
   font-family: var(--font-ar);
-  font-size: 40px;
-  line-height: 1.9;
-  padding: 14px 6px 4px;
+  font-size: clamp(30px, 4vw, 42px);
+  line-height: 1.85;
+  padding: 20px 8px 8px;
 }
 .record-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
   align-items: stretch;
+  padding: 22px;
 }
 .record-controls {
   display: flex;
   align-items: center;
   gap: 20px;
-  justify-content: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
 }
 .record-meta {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
+.recording-status-card {
+  min-width: 220px;
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.recording-status-card.live {
+  border-color: rgba(227, 6, 19, 0.3);
+  background: rgba(227, 6, 19, 0.05);
+}
+.recording-status-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
 .timer.big {
-  font-size: 30px;
+  font-size: 34px;
 }
 .review-block {
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+.workflow-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
+}
+.workflow-card.compact {
+  padding: 12px 14px;
+}
+.workflow-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.workflow-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.workflow-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.workflow-step.active .workflow-icon {
+  color: var(--accent);
+}
+.workflow-step.success .workflow-icon {
+  color: var(--green);
+}
+.workflow-step.error .workflow-icon {
+  color: var(--red);
+}
+.workflow-step.pending .workflow-icon {
+  color: var(--muted);
+}
+.workflow-icon {
+  font-weight: 700;
+  line-height: 1.4;
+}
+.workflow-label {
+  font-weight: 600;
+}
+.quality-card {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px;
+  background: linear-gradient(180deg, #fff, #fcfbfb);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.quality-card-head {
+  align-items: flex-start;
+}
+.quality-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.quality-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.quality-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px 13px;
+}
+.quality-item-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.quality-dot {
+  width: 20px;
+  flex: 0 0 20px;
+  text-align: center;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.quality-dot.ok {
+  color: var(--green);
+}
+.quality-dot.warn {
+  color: var(--amber);
+}
+.quality-dot.bad {
+  color: var(--red);
+}
+.quality-notes {
+  border-top: 1px dashed var(--border);
+  padding-top: 12px;
 }
 .done-panel {
   text-align: center;
@@ -1104,7 +1303,95 @@ body.modal-open {
 .mic-row {
   display: flex;
   justify-content: center;
-  padding-top: 4px;
+}
+.recorder-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.shortcut-bar {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.status-pill.connected {
+  background: rgba(30, 158, 87, 0.12);
+  color: var(--green);
+  border-color: rgba(30, 158, 87, 0.26);
+}
+.status-pill.offline {
+  background: rgba(229, 72, 77, 0.12);
+  color: var(--red);
+  border-color: rgba(229, 72, 77, 0.3);
+}
+.status-pill.checking {
+  background: rgba(20, 23, 28, 0.06);
+  color: var(--muted);
+}
+.completion-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 22px 0;
+}
+.completion-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+@media (max-width: 780px) {
+  .recorder-top {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .recorder-progress-body,
+  .quality-grid {
+    grid-template-columns: 1fr;
+  }
+  .recorder-progress-grid,
+  .session-stats-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .record-controls {
+    justify-content: center;
+  }
+  .recording-status-card {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .recorder-main,
+  .recorder-progress {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .record-panel,
+  .prompt-panel {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .recorder-progress-grid,
+  .session-stats-grid {
+    grid-template-columns: 1fr;
+  }
+  .shortcut-bar {
+    justify-content: flex-start;
+  }
 }
 
 /* ---------- dataset cards ---------- */

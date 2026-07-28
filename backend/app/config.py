@@ -16,9 +16,11 @@ class Settings(BaseSettings):
     # env_file is overridable (tests point it at a nonexistent path for hermetic
     # runs). The .env file is treated as authoritative — see the source ordering
     # below — so the endpoint/key you configure here win over any ambient
-    # AZURE_OPENAI_* variables left in the shell by other projects.
+    # AZURE_OPENAI_* variables left in the shell by other projects. For local
+    # development, `.env.local` can override `.env` without changing the
+    # deployment-oriented defaults checked into the environment file.
     model_config = SettingsConfigDict(
-        env_file=os.environ.get("LAHJA_ENV_FILE", ".env"),
+        env_file=os.environ.get("LAHJA_ENV_FILE") or (".env", ".env.local"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

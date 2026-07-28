@@ -218,7 +218,7 @@ class ScriptPatch(BaseModel):
 
 class GenerateParams(BaseModel):
     count: int = Field(default=20, ge=1, le=100)
-    styles: list[str] = Field(default_factory=lambda: ["neutral", "friendly"])
+    styles: list[str] = Field(default_factory=lambda: ["neutral"])
     domains: list[str] = Field(default_factory=lambda: ["customer_support"])
     languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str = "emirati"
