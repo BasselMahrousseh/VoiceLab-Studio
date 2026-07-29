@@ -5,7 +5,7 @@ import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder"
 import Logo from "../components/Logo";
 import LevelMeter from "../components/LevelMeter";
 import Waveform from "../components/Waveform";
-import { Spinner } from "../components/widgets";
+import { Chip, Spinner } from "../components/widgets";
 import { AppStatus, QcIssue, Recording, RecorderContext, Script } from "../types";
 
 type Phase = "ready" | "recording" | "processing" | "review" | "transition";
@@ -38,6 +38,8 @@ export default function Recorder() {
   const [rec, setRec] = useState<Recording | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState("");
+  const [roomToneMessage, setRoomToneMessage] = useState<string>("");
+  const [roomToneBusy, setRoomToneBusy] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState(localStorage.getItem("lahja_device") || "");
@@ -101,6 +103,33 @@ export default function Recorder() {
     }
     return recorder.current;
   }, [deviceId]);
+
+  const roomToneCheck = useCallback(async () => {
+    if (!ctx?.session_id) return;
+    if (phaseRef.current !== "ready") return;
+    if (roomToneBusy) return;
+
+    setRoomToneBusy(true);
+    setRoomToneMessage("Recording 3s of room tone — stay silent…");
+    try {
+      const r = await ensureRecorder();
+      r.start();
+      await new Promise((resolve) => window.setTimeout(resolve, 3000));
+      const result = await r.stop();
+
+      const resp = await upload<{ message: string; status: string; room_tone_dbfs: number }>(
+        `/api/sessions/${ctx.session_id}/room-tone`,
+        result.blob,
+        "room_tone.wav"
+      );
+      setRoomToneMessage(resp.message);
+      await loadContext();
+    } catch (e) {
+      setRoomToneMessage(`Room tone check failed: ${(e as Error).message}`);
+    } finally {
+      setRoomToneBusy(false);
+    }
+  }, [ctx?.session_id, ensureRecorder, loadContext, roomToneBusy]);
 
   const resetTake = useCallback(() => {
     setTake(null);
@@ -330,6 +359,19 @@ export default function Recorder() {
         </div>
         <div className="row gap">
           <ConnectionPill state={connection} />
+          {ctx?.room_tone_status && (
+            <Chip tone={ctx.room_tone_status === "ok" ? "ok" : "warn"}>
+              room {ctx.room_tone_dbfs != null ? ctx.room_tone_dbfs.toFixed(0) : "?"} dBFS
+            </Chip>
+          )}
+          <button
+            className="btn ghost small"
+            onClick={() => void roomToneCheck()}
+            disabled={!ctx?.session_id || roomToneBusy || phase !== "ready"}
+            title="3s silence capture to estimate room tone noise floor"
+          >
+            Room tone check
+          </button>
           <span className="muted small">{user?.display_name || user?.username}</span>
           <button className="btn ghost small" onClick={logout}>
             Sign out
@@ -382,6 +424,7 @@ export default function Recorder() {
       )}
 
       <main className="recorder-main">
+        {roomToneMessage && <div className="banner info">{roomToneMessage}</div>}
         {error && <div className="banner error">{error}</div>}
 
         {ctx?.dataset?.instructions && (

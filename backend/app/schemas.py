@@ -124,6 +124,8 @@ class RecorderContextOut(BaseModel):
     session_id: int | None
     progress: dict
     next_script: "ScriptOut | None" = None
+    room_tone_dbfs: float | None = None
+    room_tone_status: str | None = None
 
 
 class SpeakerCreate(BaseModel):

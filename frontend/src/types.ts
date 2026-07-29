@@ -62,6 +62,8 @@ export interface RecorderContext {
   session_id: number | null;
   progress: { total: number; done: number; remaining: number };
   next_script: Script | null;
+  room_tone_dbfs: number | null;
+  room_tone_status: string | null;
 }
 
 export interface Script {

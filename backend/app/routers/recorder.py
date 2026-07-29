@@ -86,6 +86,8 @@ def recorder_context(db: Session = Depends(get_db), user: User = Depends(get_cur
         session_id=session.id,
         progress=_progress(db, user),
         next_script=_script_out(db, nxt) if nxt else None,
+        room_tone_dbfs=session.room_tone_dbfs,
+        room_tone_status=session.room_tone_status,
     )
 
 

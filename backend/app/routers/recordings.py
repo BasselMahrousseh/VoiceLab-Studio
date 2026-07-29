@@ -216,10 +216,18 @@ def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_d
 
 
 @router.post("/{rec_id}/reject", response_model=RecordingOut)
-def reject_recording(rec_id: int, payload: RejectIn, db: Session = Depends(get_db)):
+def reject_recording(
+    rec_id: int,
+    payload: RejectIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
+    # If the recorder rejects a take (restart/skip), remove the uploaded master
+    # immediately so blob storage isn't polluted with unaccepted takes.
+    storage.delete_master(settings, r.rel_path)
     r.human_status = "rejected"
     r.reviewed_at = datetime.now(timezone.utc)
     r.review_note = payload.note
