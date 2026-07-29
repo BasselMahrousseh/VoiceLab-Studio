@@ -515,8 +515,10 @@ def test_guarded_user_and_dataset_deletion():
                 )
             },
         ).json()
-        audio_path = get_settings().audio_dir / recording["rel_path"]
-        assert audio_path.exists()
+        settings = get_settings()
+        # After upload the take is staged in pending_dir, not audio_dir yet.
+        pending_path = settings.resolved_pending_dir / recording["rel_path"]
+        assert pending_path.exists()
 
         deleted_dataset = client.delete(f"/api/datasets/{dataset['id']}")
         assert deleted_dataset.status_code == 200
@@ -527,6 +529,9 @@ def test_guarded_user_and_dataset_deletion():
             "recordings_deleted": 1,
             "audio_cleanup_failures": 0,
         }
+        # Both staging and permanent locations must be gone after dataset deletion.
+        assert not pending_path.exists()
+        audio_path = settings.audio_dir / recording["rel_path"]
         assert not audio_path.exists()
         assert client.get(f"/api/datasets/{dataset['id']}").status_code == 404
 

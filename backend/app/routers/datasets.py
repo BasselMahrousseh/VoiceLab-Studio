@@ -190,6 +190,11 @@ def delete_dataset(
             # storage cleanup is temporarily unavailable. Report the count so
             # operators can identify that maintenance is required.
             cleanup_failures += 1
+        # Also remove any staging copy that was never accepted (pending takes).
+        try:
+            storage.delete_pending(settings, rel_path)
+        except Exception:
+            pass
 
     return {
         "deleted": True,
