@@ -5,6 +5,7 @@ import { useAuth } from "./auth";
 import Logo from "./components/Logo";
 import { Spinner } from "./components/widgets";
 import Datasets from "./pages/Datasets";
+import Analytics from "./pages/Analytics";
 import ExportPage from "./pages/ExportPage";
 import Login from "./pages/Login";
 import Recorder from "./pages/Recorder";
@@ -14,7 +15,9 @@ import Settings from "./pages/Settings";
 import Studio from "./pages/Studio";
 import Team from "./pages/Team";
 import { AppStatus } from "./types";
+import { formatDuration } from "./format";
 
+export { formatDuration };
 export default function App() {
   const { user, loading } = useAuth();
 
@@ -36,6 +39,14 @@ function AdminShell() {
   const location = useLocation();
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [error, setError] = useState("");
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => (localStorage.getItem("lahja_theme") as "light" | "dark") || "light"
+  );
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("lahja_theme", theme);
+  }, [theme]);
 
   const refresh = useCallback(() => {
     get<AppStatus>("/api/status")
@@ -61,6 +72,7 @@ function AdminShell() {
         <nav>
           <NavLink to="/datasets">📁 Datasets</NavLink>
           <NavLink to="/team">👥 Team</NavLink>
+          <NavLink to="/analytics">📊 Analytics</NavLink>
           <NavLink to="/studio">🎙️ Studio</NavLink>
           <NavLink to="/scripts">📜 Script library</NavLink>
           <NavLink to="/review">🧪 Review</NavLink>
@@ -91,6 +103,9 @@ function AdminShell() {
                 <div className="muted small">admin</div>
               </div>
             </div>
+            <button className="btn ghost small logout-btn" onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}>
+              {theme === "light" ? "Dark mode" : "Light mode"}
+            </button>
             <button className="btn ghost small logout-btn" onClick={logout}>
               Sign out
             </button>
@@ -104,6 +119,7 @@ function AdminShell() {
             <Route path="/" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<Datasets status={status} />} />
             <Route path="/team" element={<Team />} />
+            <Route path="/analytics" element={<Analytics />} />
             <Route path="/studio" element={<Studio status={status} onChanged={refresh} />} />
             <Route path="/scripts" element={<Scripts status={status} />} />
             <Route path="/review" element={<Review status={status} onChanged={refresh} />} />
@@ -115,12 +131,4 @@ function AdminShell() {
       </main>
     </div>
   );
-}
-
-export function formatDuration(sec: number): string {
-  const s = Math.round(sec);
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  if (h) return `${h}h ${m.toString().padStart(2, "0")}m`;
-  return `${m}m ${(s % 60).toString().padStart(2, "0")}s`;
 }

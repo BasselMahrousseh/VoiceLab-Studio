@@ -42,7 +42,13 @@ def _unique_slug(db: Session, name: str) -> str:
 def dataset_out(db: Session, ds: Dataset) -> DatasetOut:
     out = DatasetOut.model_validate(ds)
     out.script_count = (
-        db.query(func.count(Script.id)).filter(Script.dataset_id == ds.id).scalar()
+        db.query(func.count(Script.id))
+        .filter(
+            Script.dataset_id == ds.id,
+            Script.active.is_(True),
+            Script.status.notin_(["flagged", "retired"]),
+        )
+        .scalar()
     )
     accepted = (
         db.query(

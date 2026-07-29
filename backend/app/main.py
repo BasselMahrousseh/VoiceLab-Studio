@@ -17,6 +17,7 @@ from .config import get_settings
 from .db import init_db
 from .deps import get_current_user, get_user_flexible, require_admin, require_admin_flexible
 from .routers import (
+    analytics,
     auth,
     datasets,
     exports,
@@ -56,6 +57,7 @@ app.include_router(status.router, prefix="/api", dependencies=[Depends(get_curre
 app.include_router(sessions.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(recordings.router, prefix="/api", dependencies=[Depends(get_user_flexible)])
 app.include_router(recorder.router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(analytics.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(scripts.router, prefix="/api", dependencies=[Depends(get_user_flexible)])
 app.include_router(speakers.router, prefix="/api", dependencies=[Depends(require_admin)])
 app.include_router(datasets.router, prefix="/api")  # router requires admin

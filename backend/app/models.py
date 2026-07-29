@@ -221,6 +221,19 @@ class Recording(Base):
     speaker: Mapped[Speaker] = relationship()
 
 
+class ScriptSkip(Base):
+    """Audit row for a script a recorder skipped / deleted from their queue."""
+
+    __tablename__ = "script_skips"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    speaker_id: Mapped[int] = mapped_column(ForeignKey("speakers.id"), index=True)
+    dataset_id: Mapped[int | None] = mapped_column(ForeignKey("datasets.id"), nullable=True, index=True)
+    script_id: Mapped[str] = mapped_column(String(64), default="")
+    display_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class ExportBatch(Base):
     __tablename__ = "export_batches"
 

@@ -238,6 +238,15 @@ class FlagIn(BaseModel):
     reason: str = ""
 
 
+class RecorderSkipIn(BaseModel):
+    script_id: int
+
+
+class RecorderSkipOut(BaseModel):
+    next_script: ScriptOut | None = None
+    progress: dict = Field(default_factory=dict)
+
+
 # --- recordings ----------------------------------------------------------------
 class RecordingOut(ORMModel):
     id: int
@@ -311,6 +320,76 @@ class ExportOut(ORMModel):
     dataset_version: str
     status: str
     error: str
+
+
+# --- analytics / performance dashboard ---------------------------------------
+class RecorderDeviceIn(BaseModel):
+    """Client-reported browser / mic metadata for the open session."""
+
+    browser: str | None = None
+    userAgent: str | None = None
+    deviceId: str | None = None
+    deviceLabel: str | None = None
+    microphone: str | None = None
+
+
+class InsightOut(BaseModel):
+    code: str
+    level: str  # success | warn | info
+    message: str
+
+
+class AchievementOut(BaseModel):
+    code: str
+    icon: str
+    title: str
+    earned: bool
+    detail: str = ""
+
+
+class TrendOut(BaseModel):
+    current: float | None = None
+    previous: float | None = None
+    delta: float | None = None
+    direction: str = "stable"  # improving | stable | declining
+
+
+class LeaderboardRowOut(BaseModel):
+    user_id: int
+    display_name: str
+    username: str
+    dataset_id: int | None = None
+    dataset_name: str | None = None
+    assigned: int = 0
+    completed: int = 0
+    remaining: int = 0
+    skipped: int = 0
+    accepted: int = 0
+    acceptance_rate: float = 0.0
+    avg_qc_score: float | None = None
+    avg_time_per_script_sec: float | None = None
+    hours_recorded: float = 0.0
+    current_streak: int = 0
+    total_recordings: int = 0
+
+
+class PerformanceDashboardOut(BaseModel):
+    """Single aggregated payload for recorder + admin performance views."""
+
+    profile: dict
+    progress: dict
+    quality: dict
+    activity: dict
+    productivity: dict
+    audio_quality: dict
+    insights: list[InsightOut] = Field(default_factory=list)
+    ai_insights: list[str] = Field(default_factory=list)
+    achievements: list[AchievementOut] = Field(default_factory=list)
+    session_summary: dict | None = None
+    kpis: dict = Field(default_factory=dict)
+    trends: dict = Field(default_factory=dict)
+    charts: dict = Field(default_factory=dict)
+    filters: dict = Field(default_factory=dict)
 
 
 # Resolve forward reference to ScriptOut now that it is defined.

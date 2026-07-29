@@ -5,11 +5,13 @@ import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder"
 import Logo from "../components/Logo";
 import LevelMeter from "../components/LevelMeter";
 import Waveform from "../components/Waveform";
+import PerformanceDashboardView from "../components/dashboard/PerformanceDashboardView";
 import { Chip, Spinner } from "../components/widgets";
-import { AppStatus, QcIssue, Recording, RecorderContext, Script } from "../types";
+import { AppStatus, PerformanceDashboard, QcIssue, Recording, RecorderContext, Script } from "../types";
 
 type Phase = "ready" | "recording" | "processing" | "review" | "transition";
 type ConnectionState = "checking" | "connected" | "offline";
+type ViewMode = "record" | "dashboard";
 type WorkflowStepState = "pending" | "active" | "success" | "error";
 
 interface WorkflowStep {
@@ -56,6 +58,12 @@ export default function Recorder() {
     restarted: 0,
     skipped: 0,
   });
+  const [viewMode, setViewMode] = useState<ViewMode>("record");
+  const [dashboard, setDashboard] = useState<PerformanceDashboard | null>(null);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(
+    () => (localStorage.getItem("lahja_theme") as "light" | "dark") || "light"
+  );
 
   const recorder = useRef<StudioRecorder | null>(null);
   const timerRef = useRef<number>(0);
@@ -78,6 +86,35 @@ export default function Recorder() {
       });
   }, []);
   useEffect(loadContext, [loadContext]);
+
+  const loadDashboard = useCallback(() => {
+    setDashboardLoading(true);
+    get<PerformanceDashboard>("/api/recorder/dashboard")
+      .then(setDashboard)
+      .catch(() => undefined)
+      .finally(() => setDashboardLoading(false));
+  }, []);
+
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("lahja_theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!ctx?.session_id) return;
+    const selected = devices.find((d) => d.deviceId === deviceId);
+    void post("/api/recorder/session-device", {
+      browser: navigator.userAgent,
+      userAgent: navigator.userAgent,
+      deviceId: deviceId || undefined,
+      deviceLabel: selected?.label || undefined,
+      microphone: selected?.label || undefined,
+    }).catch(() => undefined);
+  }, [ctx?.session_id, deviceId, devices]);
 
   useEffect(() => () => recorder.current?.close(), []);
 
@@ -253,6 +290,7 @@ export default function Recorder() {
       await post(`/api/recordings/${rec.id}/accept`, { force });
       updateWorkflowStep("save", { state: "success", label: "Recording saved" });
       setSessionStats((stats) => ({ ...stats, accepted: stats.accepted + 1 }));
+      loadDashboard();
       updateWorkflowStep("next", { state: "active" });
       resetTake();
       setElapsed(0);
@@ -278,7 +316,7 @@ export default function Recorder() {
       updateWorkflowStep("save", { state: "error", label: "Save failed", detail: message });
       setPhase("review");
     }
-  }, [beginWorkflow, rec, resetTake, updateWorkflowStep]);
+  }, [beginWorkflow, loadDashboard, rec, resetTake, updateWorkflowStep]);
 
   const restart = useCallback(async () => {
     if (rec) {
@@ -305,27 +343,42 @@ export default function Recorder() {
     setElapsed(0);
     try {
       beginWorkflow("Skipping sentence", [
-        { key: "skip", label: "Marking this sentence as skipped...", state: "active" },
+        { key: "skip", label: "Removing this sentence...", state: "active" },
         { key: "next", label: "Loading next sentence...", state: "pending" },
       ]);
       setSessionStats((stats) => ({ ...stats, skipped: stats.skipped + 1 }));
-      updateWorkflowStep("skip", { state: "success", label: "Sentence skipped" });
+      updateWorkflowStep("skip", { state: "success", label: "Sentence removed" });
       updateWorkflowStep("next", { state: "active" });
-      const next = await get<Script | null>(`/api/recorder/next?exclude_id=${script.id}`);
-      if (next) {
-        setScript(next);
+      const result = await post<{ next_script: Script | null; progress: { total: number; done: number; remaining: number } }>(
+        "/api/recorder/skip",
+        { script_id: script.id }
+      );
+      loadDashboard();
+      setCtx((prev) =>
+        prev
+          ? {
+              ...prev,
+              progress: result.progress,
+              next_script: result.next_script,
+              dataset: prev.dataset
+                ? { ...prev.dataset, script_count: result.progress.total }
+                : prev.dataset,
+            }
+          : prev
+      );
+      if (result.next_script) {
+        setScript(result.next_script);
         updateWorkflowStep("next", { state: "success", label: "Next sentence ready" });
         await new Promise((resolve) => window.setTimeout(resolve, 220));
         setWorkflowTitle("");
         setWorkflowSteps([]);
         setPhase("ready");
       } else {
-        setScript(script);
-        setError("There are no other unrecorded sentences to skip to.");
+        setScript(null);
+        setError("");
         updateWorkflowStep("next", {
-          state: "error",
-          label: "No alternate sentence available",
-          detail: "There are no other unrecorded sentences to skip to.",
+          state: "success",
+          label: "No more sentences left",
         });
         setPhase("ready");
       }
@@ -335,7 +388,7 @@ export default function Recorder() {
       updateWorkflowStep("next", { state: "error", label: "Could not load the next sentence", detail: message });
       setPhase("ready");
     }
-  }, [beginWorkflow, script, rec, resetTake, updateWorkflowStep]);
+  }, [beginWorkflow, loadDashboard, script, rec, resetTake, updateWorkflowStep]);
 
   // keyboard: Space = record/stop, Enter = save, R = restart, S = skip
   useEffect(() => {
@@ -374,7 +427,8 @@ export default function Recorder() {
   }, [ctx?.dataset?.accepted_count, ctx?.dataset?.accepted_duration_sec, elapsedSessionSec, sessionStats.accepted]);
   const estimatedRemainingSec = Math.max(0, Math.round((progress?.remaining ?? 0) * averageSecondsPerSentence));
   const qualitySummary = rec ? summarizeQuality(rec) : null;
-  const completionStats = progress && progress.total > 0 && !script;
+  const completionStats = progress && progress.total > 0 && !script && progress.remaining === 0;
+  const skippedQueueEmpty = progress && progress.remaining > 0 && !script;
 
   if (ctx === undefined) return <div className="app-loading"><Spinner label="Loading your session…" /></div>;
 
@@ -386,6 +440,29 @@ export default function Recorder() {
         </div>
         <div className="row gap">
           <ConnectionPill state={connection} />
+          <div className="recorder-view-toggle" role="tablist" aria-label="Recorder view">
+            <button
+              type="button"
+              role="tab"
+              className={`btn small ${viewMode === "record" ? "record" : "ghost"}`}
+              aria-selected={viewMode === "record"}
+              onClick={() => setViewMode("record")}
+            >
+              Record
+            </button>
+            <button
+              type="button"
+              role="tab"
+              className={`btn small ${viewMode === "dashboard" ? "record" : "ghost"}`}
+              aria-selected={viewMode === "dashboard"}
+              onClick={() => {
+                setViewMode("dashboard");
+                loadDashboard();
+              }}
+            >
+              Dashboard
+            </button>
+          </div>
           {ctx?.room_tone_status && (
             <Chip tone={ctx.room_tone_status === "ok" ? "ok" : "warn"}>
               room {ctx.room_tone_dbfs != null ? ctx.room_tone_dbfs.toFixed(0) : "?"} dBFS
@@ -399,6 +476,13 @@ export default function Recorder() {
           >
             Room tone check
           </button>
+          <button
+            className="btn ghost small"
+            onClick={() => setTheme((t) => (t === "light" ? "dark" : "light"))}
+            title="Toggle light/dark theme"
+          >
+            {theme === "light" ? "Dark" : "Light"}
+          </button>
           <span className="muted small">{user?.display_name || user?.username}</span>
           <button className="btn ghost small" onClick={logout}>
             Sign out
@@ -406,6 +490,16 @@ export default function Recorder() {
         </div>
       </header>
 
+      {viewMode === "dashboard" ? (
+        <main className="recorder-main recorder-dashboard-main">
+          {dashboardLoading && !dashboard && <Spinner label="Loading your dashboard…" />}
+          {dashboard && <PerformanceDashboardView data={dashboard} />}
+          {!dashboardLoading && !dashboard && (
+            <div className="panel muted">Dashboard unavailable right now.</div>
+          )}
+        </main>
+      ) : (
+      <>
       {progress && (
         <div className="panel recorder-progress fade-in">
           <div className="row spread recorder-progress-head">
@@ -495,6 +589,18 @@ export default function Recorder() {
               </div>
             </div>
             <p className="muted">Thank you!</p>
+          </div>
+        ) : skippedQueueEmpty ? (
+          <div className="panel done-panel fade-in">
+            <div className="done-emoji">⏭️</div>
+            <h2>No more sentences left</h2>
+            <p className="muted">
+              Skipped sentences were removed from the dataset. Refresh if an administrator
+              added more scripts ({progress.remaining} still counted as remaining).
+            </p>
+            <button className="btn ghost" onClick={loadContext}>
+              Check again
+            </button>
           </div>
         ) : (
           <>
@@ -677,6 +783,8 @@ export default function Recorder() {
           </>
         )}
       </main>
+      </>
+      )}
     </div>
   );
 }
