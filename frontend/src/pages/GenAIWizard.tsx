@@ -65,7 +65,7 @@ export default function GenAIWizard({
     target_sample_count: dataset?.target_sample_count || 200,
     avg_duration_sec: dataset?.target_avg_duration_sec || 6,
     styles: ["neutral"] as string[],
-    domains: ["customer_support"] as string[],
+    domains: ["customer_support", "telecom", "billing", "technical_support", "sales"] as string[],
     topics: "",
     brand_terms: "e&, du, eLife, 5G",
     generate_count: 30,
@@ -378,6 +378,23 @@ export default function GenAIWizard({
                   Styles
                   <MultiSelect options={["neutral"]} value={plan.styles} onChange={(v) => set({ styles: v })} />
                   <span className="muted small">Neutral is the only style enabled for now.</span>
+                </label>
+                <label className="span2">
+                  Telecom domains <span className="muted small">(75% of sentences spread across these)</span>
+                  <MultiSelect
+                    options={[
+                      { value: "customer_support", label: "Customer Support" },
+                      { value: "telecom",          label: "Telecom / SIM / Roaming" },
+                      { value: "billing",          label: "Billing & Payments" },
+                      { value: "technical_support",label: "Technical Support" },
+                      { value: "sales",            label: "Sales & Offers" },
+                    ]}
+                    value={plan.domains}
+                    onChange={(v) => set({ domains: v.length ? v : ["customer_support"] })}
+                  />
+                  <span className="muted small">
+                    The remaining 25% will always be everyday general sentences (greetings, family, shopping…).
+                  </span>
                 </label>
                 <label className="span2">
                   Brand / Product Terms

@@ -20,13 +20,16 @@ datasets (ASR/TTS training). Each item is one natural spoken turn a human will
 read aloud — customer or agent — from a real telecom conversation.
 
 Generation distribution:
-Approximately 75% of the batch should be realistic telecom and customer-service
-speech. Approximately 25% should be natural everyday Emirati speech unrelated
-to telecom, such as greetings, family, friends, work, school, university,
-shopping, restaurants, coffee, weather, traffic, driving, hobbies, sports,
-travel, appointments, daily routines, health, celebrations, directions, and
-polite social conversation. These non-telecom items must still sound authentic,
-recordable, and natural for UAE speakers.
+The user prompt specifies EXACT counts: a number of telecom/domain sentences and
+a number of general everyday sentences. You MUST honour those exact counts.
+- Telecom/domain sentences: tag with the appropriate domain from the request list.
+- General everyday sentences: MUST be tagged domain="general". Topics: greetings,
+  family, friends, work, school, university, shopping, restaurants, coffee,
+  weather, traffic, driving, hobbies, sports, travel, appointments, daily
+  routines, health, celebrations, directions, polite social conversation.
+  These must sound authentic, recordable, and natural for UAE speakers.
+  Do NOT tag everyday sentences as customer_support, telecom, billing, or any
+  other telecom domain.
 
 Domain (distribute across the batch; do not collapse into one scenario):
 Customer care, billing & invoices, payments, VAT, technical support, mobile
@@ -97,7 +100,9 @@ COVERAGE_HINTS = {
 def build_user_prompt(params: dict, settings: Settings) -> str:
     count = int(params.get("count", 20))
     styles = params.get("styles") or ["neutral"]
-    domains = params.get("domains") or ["customer_support"]
+    domains = params.get("domains") or [
+        "customer_support", "telecom", "billing", "technical_support", "sales"
+    ]
     languages = params.get("languages") or ["ar-AE"]
     dialect = params.get("dialect") or "emirati"
     lengths = params.get("length_mix") or ["short", "medium", "long"]
@@ -105,14 +110,25 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
     topics = (params.get("topics") or "").strip()
     brands = (params.get("brand_terms") or "").strip()
 
+    # Compute explicit counts so the model cannot ignore the 75/25 split.
+    telecom_count = round(count * 0.75)
+    general_count = count - telecom_count  # ensures exact total
+
     lines = [
-        f"أنشئ {count} جملة.",
+        f"أنشئ {count} جملة بالتوزيع التالي الصارم:",
+        f"  • {telecom_count} جملة من المجالات المحددة: {', '.join(domains)} — "
+        f"(وزّع بالتساوي قدر الإمكان بين هذه المجالات).",
+        f"  • {general_count} جملة من مواضيع يومية عامة لا علاقة لها بالاتصالات "
+        f"(مثل: التحيات، العائلة، الأصدقاء، المدرسة، التسوق، المطاعم، الطقس، المرور، "
+        f"الهوايات، الرياضة، السفر، المواعيد، الصحة، الاحتفالات، الاتجاهات، المحادثات الاجتماعية). "
+        f"يجب أن تحمل هذه الجمل domain=\"general\" في الـ JSON.",
         f"الأساليب المطلوبة (وزّع عليها): {', '.join(styles)}",
-        f"المجالات: {', '.join(domains)}",
         f"Languages (distribute across exactly these): {', '.join(languages)}",
         f"اللهجة: {dialect}"
         + (" (مزيج طبيعي بين الإماراتية والفصحى)" if dialect == "mixed" else ""),
         f"أطوال الجمل (وزّع): {', '.join(lengths)}",
+        f"تحذير: لا تضع domain=\"customer_support\" أو أي domain من مجالات الاتصالات "
+        f"على الجمل اليومية العامة — يجب أن تكون domain=\"general\".",
     ]
     avg_duration = float(params.get("avg_duration_sec") or 0)
     if avg_duration > 0:
