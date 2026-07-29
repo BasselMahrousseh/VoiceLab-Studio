@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { get, patch, post, remove } from "../api";
+import { get, mediaUrl, patch, post, remove } from "../api";
 import { Modal, MultiSelect, Spinner } from "../components/widgets";
 import { AppStatus, Dataset, User } from "../types";
 import GenAIWizard from "./GenAIWizard";
@@ -453,19 +453,31 @@ function DatasetDetail({
 
   return (
     <Modal title={dataset.name} onClose={onClose} wide>
-      <div className="detail-stats row gap wrap">
-        <span className="chip">{formatDialect(dataset.dialect)}</span>
-        {(dataset.languages?.length ? dataset.languages : [dataset.language]).map((language) => (
-          <span key={language} className="chip accent">{formatLanguage(language)}</span>
-        ))}
-        <span className="chip">📜 {dataset.script_count} scripts</span>
-        <span className="chip ok">✓ {dataset.accepted_count} accepted · {fmtHours(dataset.accepted_duration_sec)}</span>
-        <span className="chip">🎙️ {dataset.recorder_count} recorders</span>
-        {dataset.target_sample_count > 0 && (
-          <span className="chip accent">
-            🎯 {dataset.target_sample_count.toLocaleString()} samples ·{" "}
-            {fmtHours(dataset.target_sample_count * dataset.target_avg_duration_sec)}
-          </span>
+      <div className="row spread" style={{ alignItems: "flex-start", gap: 8 }}>
+        <div className="detail-stats row gap wrap">
+          <span className="chip">{formatDialect(dataset.dialect)}</span>
+          {(dataset.languages?.length ? dataset.languages : [dataset.language]).map((language) => (
+            <span key={language} className="chip accent">{formatLanguage(language)}</span>
+          ))}
+          <span className="chip">📜 {dataset.script_count} scripts</span>
+          <span className="chip ok">✓ {dataset.accepted_count} accepted · {fmtHours(dataset.accepted_duration_sec)}</span>
+          <span className="chip">🎙️ {dataset.recorder_count} recorders</span>
+          {dataset.target_sample_count > 0 && (
+            <span className="chip accent">
+              🎯 {dataset.target_sample_count.toLocaleString()} samples ·{" "}
+              {fmtHours(dataset.target_sample_count * dataset.target_avg_duration_sec)}
+            </span>
+          )}
+        </div>
+        {dataset.script_count > 0 && (
+          <a
+            className="btn ghost small"
+            style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+            href={mediaUrl(`/api/scripts/download?dataset_id=${dataset.id}&format=csv`)}
+            download={`dataset_${dataset.id}_scripts.csv`}
+          >
+            ⬇ Download CSV
+          </a>
         )}
       </div>
 

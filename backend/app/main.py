@@ -56,7 +56,7 @@ app.include_router(status.router, prefix="/api", dependencies=[Depends(get_curre
 app.include_router(sessions.router, prefix="/api", dependencies=[Depends(get_current_user)])
 app.include_router(recordings.router, prefix="/api", dependencies=[Depends(get_user_flexible)])
 app.include_router(recorder.router, prefix="/api", dependencies=[Depends(get_current_user)])
-app.include_router(scripts.router, prefix="/api", dependencies=[Depends(get_current_user)])
+app.include_router(scripts.router, prefix="/api", dependencies=[Depends(get_user_flexible)])
 app.include_router(speakers.router, prefix="/api", dependencies=[Depends(require_admin)])
 app.include_router(datasets.router, prefix="/api")  # router requires admin
 app.include_router(exports.router, prefix="/api", dependencies=[Depends(require_admin_flexible)])

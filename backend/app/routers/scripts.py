@@ -152,6 +152,92 @@ def list_scripts(
     return {"total": total, "items": [_script_out(db, s) for s in items]}
 
 
+@router.get("/download")
+def download_scripts(
+    dataset_id: int | None = None,
+    fmt: str = Query(default="csv", alias="format", pattern="^(txt|jsonl|csv)$"),
+    db: Session = Depends(get_db),
+):
+    """Stream all active scripts for a dataset.
+
+    - ``format=csv``   — CSV with columns: script_id, display_text, training_text,
+                         language, dialect, style, domain, tags, status, notes
+    - ``format=txt``   — one display_text per line (UTF-8, good for pasting back)
+    - ``format=jsonl`` — one JSON object per line with all script fields
+    """
+    import csv
+    import io
+
+    q = db.query(Script).filter(
+        Script.active.is_(True),
+        Script.status.notin_(["flagged", "retired"]),
+    )
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
+    scripts = q.order_by(Script.id).all()
+
+    slug = f"dataset_{dataset_id}" if dataset_id else "all_scripts"
+    filename = f"{slug}_scripts.{fmt}"
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "script_id", "display_text", "training_text",
+            "language", "dialect", "style", "domain", "tags", "status", "notes",
+        ])
+        for s in scripts:
+            writer.writerow([
+                s.script_id,
+                s.display_text,
+                s.training_text,
+                s.language,
+                s.dialect,
+                s.style,
+                s.domain,
+                "|".join(s.tags or []),
+                s.status,
+                s.notes or "",
+            ])
+        content = buf.getvalue().encode("utf-8-sig")  # utf-8-sig for Excel compat
+        from fastapi.responses import Response as _Resp
+        return _Resp(
+            content,
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    if fmt == "jsonl":
+        lines = (
+            json.dumps(
+                {
+                    "script_id": s.script_id,
+                    "display_text": s.display_text,
+                    "training_text": s.training_text,
+                    "language": s.language,
+                    "dialect": s.dialect,
+                    "style": s.style,
+                    "domain": s.domain,
+                    "tags": s.tags or [],
+                    "notes": s.notes,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for s in scripts
+        )
+        media_type = "application/x-ndjson"
+    else:
+        lines = (s.display_text + "\n" for s in scripts)
+        media_type = "text/plain; charset=utf-8"
+
+    return StreamingResponse(
+        lines,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/stats")
 def script_stats(db: Session = Depends(get_db)):
     def group(col):
