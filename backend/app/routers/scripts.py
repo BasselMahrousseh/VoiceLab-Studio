@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..db import get_db
-from ..deps import require_admin
+from ..deps import get_current_user, require_admin
 from ..models import Recording, Script
 from ..schemas import (
     FlagIn,
@@ -204,7 +204,11 @@ def download_scripts(
         return _Resp(
             content,
             media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
         )
 
     if fmt == "jsonl":
@@ -234,7 +238,11 @@ def download_scripts(
     return StreamingResponse(
         lines,
         media_type=media_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
     )
 
 
@@ -496,17 +504,50 @@ def generate_stream(
     )
 
 
+@router.patch("/{script_pk}/text", response_model=ScriptOut)
+def patch_script_text(
+    script_pk: int,
+    payload: ScriptPatch,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Allow any authenticated user (including recorders) to correct only the
+    display_text and/or training_text of a script.  All other fields are ignored
+    so recorders cannot change status, domain, priority, etc."""
+    s = db.get(Script, script_pk)
+    if not s:
+        raise HTTPException(404, "Script not found")
+    data = payload.model_dump(exclude_unset=True)
+    # Restrict recorders to text-only edits; admins may use the full PATCH below.
+    if user.role != "admin":
+        allowed = {"display_text", "training_text"}
+        data = {k: v for k, v in data.items() if k in allowed}
+    for key, value in data.items():
+        setattr(s, key, value)
+    if "training_text" in data:
+        s.normalized_hash = tn.normalized_hash(s.training_text)
+        s.length_bucket = tn.length_bucket(s.training_text)
+        s.word_count = tn.word_count(s.training_text)
+        s.char_count = len(s.training_text)
+    db.commit()
+    return _script_out(db, s)
+
+
 @router.patch("/{script_pk}", response_model=ScriptOut)
 def patch_script(
     script_pk: int,
     payload: ScriptPatch,
     db: Session = Depends(get_db),
-    _: object = Depends(require_admin),
+    user=Depends(get_current_user),
 ):
     s = db.get(Script, script_pk)
     if not s:
         raise HTTPException(404, "Script not found")
     data = payload.model_dump(exclude_unset=True)
+    # Recorders may correct only the text fields; admins can patch everything.
+    if user.role != "admin":
+        allowed = {"display_text", "training_text"}
+        data = {k: v for k, v in data.items() if k in allowed}
     for key, value in data.items():
         setattr(s, key, value)
     if "training_text" in data:

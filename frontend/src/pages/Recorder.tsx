@@ -1,5 +1,5 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { get, post, upload } from "../api";
+import { get, patch as apiPatch, post, upload } from "../api";
 import { useAuth } from "../auth";
 import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
 import Logo from "../components/Logo";
@@ -41,6 +41,10 @@ export default function Recorder() {
   const [roomToneMessage, setRoomToneMessage] = useState<string>("");
   const [roomToneBusy, setRoomToneBusy] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [editingText, setEditingText] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
+  const [editMsg, setEditMsg] = useState("");
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState(localStorage.getItem("lahja_device") || "");
   const [connection, setConnection] = useState<ConnectionState>("checking");
@@ -130,6 +134,29 @@ export default function Recorder() {
       setRoomToneBusy(false);
     }
   }, [ctx?.session_id, ensureRecorder, loadContext, roomToneBusy]);
+
+  const saveScriptText = useCallback(async () => {
+    if (!script) return;
+    setEditBusy(true);
+    setEditMsg("");
+    try {
+      const updated = await apiPatch<{ display_text: string; training_text: string }>(
+        `/api/scripts/${script.id}`,
+        { display_text: editText, training_text: editText }
+      );
+      setScript((prev) =>
+        prev
+          ? { ...prev, display_text: updated.display_text, training_text: updated.training_text }
+          : prev
+      );
+      setEditingText(false);
+      setEditMsg("Text updated successfully.");
+    } catch (e) {
+      setEditMsg(`Failed to save: ${(e as Error).message}`);
+    } finally {
+      setEditBusy(false);
+    }
+  }, [script, editText]);
 
   const resetTake = useCallback(() => {
     setTake(null);
@@ -474,11 +501,57 @@ export default function Recorder() {
             <div className="panel prompt-panel fade-in" key={script!.id}>
               <div className="row spread">
                 <div className="prompt-label muted small">Please read aloud</div>
-                <span className="chip accent">{script!.language}</span>
+                <div className="row gap">
+                  <span className="chip accent">{script!.language}</span>
+                  {phase === "ready" && !editingText && (
+                    <button
+                      className="btn ghost small"
+                      title="Edit the script text"
+                      onClick={() => { setEditText(script!.display_text); setEditingText(true); setEditMsg(""); }}
+                    >
+                      ✎ Edit text
+                    </button>
+                  )}
+                </div>
               </div>
-              <div className="arabic prompt-text" dir="auto">
-                {script!.display_text}
-              </div>
+
+              {editingText ? (
+                <>
+                  <textarea
+                    className="edit-script-area"
+                    dir="auto"
+                    rows={4}
+                    value={editText}
+                    onChange={(e) => setEditText(e.target.value)}
+                    disabled={editBusy}
+                  />
+                  <div className="row gap" style={{ marginTop: 8 }}>
+                    <button
+                      className="btn accent small"
+                      onClick={() => void saveScriptText()}
+                      disabled={editBusy || editText.trim() === ""}
+                    >
+                      {editBusy ? "Saving…" : "Save text"}
+                    </button>
+                    <button
+                      className="btn ghost small"
+                      onClick={() => { setEditingText(false); setEditMsg(""); }}
+                      disabled={editBusy}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                  {editMsg && <div className={`banner ${editMsg.startsWith("Failed") ? "error" : "info"}`}>{editMsg}</div>}
+                </>
+              ) : (
+                <>
+                  <div className="arabic prompt-text" dir="auto">
+                    {script!.display_text}
+                  </div>
+                  {editMsg && <div className="banner info">{editMsg}</div>}
+                </>
+              )}
+
               {script!.notes && <div className="muted small note-line">📝 {script!.notes}</div>}
             </div>
 

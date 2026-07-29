@@ -473,7 +473,7 @@ function DatasetDetail({
           <a
             className="btn ghost small"
             style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-            href={mediaUrl(`/api/scripts/download?dataset_id=${dataset.id}&format=csv`)}
+            href={mediaUrl(`/api/scripts/download?dataset_id=${dataset.id}&format=csv&t=${Date.now()}`)}
             download={`dataset_${dataset.id}_scripts.csv`}
           >
             ⬇ Download CSV

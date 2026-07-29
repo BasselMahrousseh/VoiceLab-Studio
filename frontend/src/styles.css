@@ -1205,6 +1205,26 @@ body.modal-open {
   line-height: 1.85;
   padding: 20px 8px 8px;
 }
+
+.edit-script-area {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-ar);
+  font-size: clamp(18px, 2.5vw, 26px);
+  line-height: 1.7;
+  padding: 12px;
+  border: 1.5px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg2);
+  color: var(--text);
+  resize: vertical;
+  margin-top: 12px;
+}
+.edit-script-area:focus {
+  outline: none;
+  border-color: var(--accent-hi, var(--accent));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
 .record-panel {
   display: flex;
   flex-direction: column;
