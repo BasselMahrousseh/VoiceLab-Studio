@@ -70,7 +70,9 @@ def upload_recording(
         script.script_id,
         take_number,
     )
-    storage.save_master(settings, rel_path, content)
+    # Stage locally only — nothing written to Azure Blob until the recorder
+    # explicitly clicks Save/Accept (see accept_recording below).
+    storage.save_pending(settings, rel_path, content)
 
     qc = analyze_recording(audio, settings, raw_bytes=content)
 
@@ -175,7 +177,12 @@ def recording_audio(
     if not r:
         raise HTTPException(404, "Recording not found")
     try:
-        content = storage.read_master(settings, r.rel_path)
+        # Accepted takes live in permanent storage; pending takes are still in
+        # the local staging area.
+        if r.human_status == "pending":
+            content = storage.read_pending(settings, r.rel_path)
+        else:
+            content = storage.read_master(settings, r.rel_path)
     except Exception as exc:
         raise HTTPException(404, f"Audio file unavailable: {exc}")
     filename = r.rel_path.rsplit("/", 1)[-1]
@@ -187,7 +194,12 @@ def recording_audio(
 
 
 @router.post("/{rec_id}/accept", response_model=RecordingOut)
-def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_db)):
+def accept_recording(
+    rec_id: int,
+    payload: AcceptIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
@@ -196,6 +208,14 @@ def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_d
             409,
             "Automatic QC failed. Re-record this take or explicitly use Save anyway.",
         )
+    # Promote from local staging area to permanent storage (Azure Blob or local
+    # audio dir) only now that the recorder has explicitly clicked Save/Accept.
+    try:
+        storage.promote_to_master(settings, r.rel_path)
+    except FileNotFoundError:
+        # Pending file missing (e.g. duplicate accept call) — treat as already
+        # promoted; don't block acceptance.
+        pass
     r.human_status = "accepted"
     r.reviewed_at = datetime.now(timezone.utc)
     r.forced_save = r.qc_status == "failed" and payload.force
@@ -225,9 +245,9 @@ def reject_recording(
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
-    # If the recorder rejects a take (restart/skip), remove the uploaded master
-    # immediately so blob storage isn't polluted with unaccepted takes.
-    storage.delete_master(settings, r.rel_path)
+    # The take was only in the local staging area — delete it from there.
+    # Nothing ever reached Azure Blob for a pending take, so no blob cleanup needed.
+    storage.delete_pending(settings, r.rel_path)
     r.human_status = "rejected"
     r.reviewed_at = datetime.now(timezone.utc)
     r.review_note = payload.note

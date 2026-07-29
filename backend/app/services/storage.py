@@ -83,6 +83,47 @@ def abs_audio_path(settings: Settings, rel_path: str) -> Path:
     return settings.audio_dir / _safe_rel_path(rel_path)
 
 
+def save_pending(settings: Settings, rel_path: str, content: bytes) -> Path:
+    """Write a take to the local pending staging area.
+
+    Nothing goes to Azure Blob yet.  The file is promoted (or deleted) when
+    the recorder clicks Save/Accept or Restart/Skip respectively.
+    """
+    path = settings.resolved_pending_dir / _safe_rel_path(rel_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
+def read_pending(settings: Settings, rel_path: str) -> bytes:
+    """Read back a pending (not-yet-accepted) take from the staging area."""
+    return (settings.resolved_pending_dir / _safe_rel_path(rel_path)).read_bytes()
+
+
+def delete_pending(settings: Settings, rel_path: str) -> None:
+    """Remove a pending take that was rejected / restarted."""
+    path = settings.resolved_pending_dir / _safe_rel_path(rel_path)
+    path.unlink(missing_ok=True)
+    pending_root = settings.resolved_pending_dir.resolve()
+    parent = path.parent
+    while parent != pending_root and pending_root in parent.resolve().parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
+def promote_to_master(settings: Settings, rel_path: str) -> None:
+    """Move a pending take into permanent storage (local or Azure Blob).
+
+    Called only when the recorder explicitly clicks Save/Accept.
+    """
+    content = read_pending(settings, rel_path)
+    save_master(settings, rel_path, content)
+    delete_pending(settings, rel_path)
+
+
 def save_master(settings: Settings, rel_path: str, content: bytes) -> Path:
     if settings.storage_backend == "azure_blob":
         from azure.storage.blob import ContentSettings

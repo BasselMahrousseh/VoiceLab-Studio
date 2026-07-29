@@ -46,6 +46,9 @@ class Settings(BaseSettings):
 
     # --- storage ---
     data_dir: Path = Path("data")
+    # Pending takes are held here until the recorder clicks Save/Accept.
+    # Defaults to a "pending" sub-folder inside data_dir.
+    pending_dir: Path | None = None
     storage_backend: str = "local"  # "local" | "azure_blob"
     azure_storage_account_url: str = ""
     azure_storage_container: str = "voicelab"
@@ -138,6 +141,10 @@ class Settings(BaseSettings):
     @property
     def audio_dir(self) -> Path:
         return self.data_dir / "audio"
+
+    @property
+    def resolved_pending_dir(self) -> Path:
+        return self.pending_dir if self.pending_dir else self.data_dir / "pending"
 
     @property
     def export_dir(self) -> Path:
