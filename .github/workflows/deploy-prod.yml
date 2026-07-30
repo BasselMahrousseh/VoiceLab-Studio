@@ -21,7 +21,7 @@ env:
   NODE_VERSION: "22"
 
 jobs:
-  build-test-deploy:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -55,15 +55,59 @@ jobs:
           npm run typecheck
           npm run build
 
+      # Source-only zip. Oryx installs requirements.txt into antenv on App Service.
       - name: Assemble App Service package
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p deploy/frontend
           cp -R backend deploy/backend
           cp -R frontend/dist deploy/frontend/dist
-          cp requirements.txt startup.sh README.md POLICY.md deploy/
+          cp requirements.txt README.md POLICY.md deploy/
+          # Keep LF endings so `bash startup.sh` parses cleanly on Linux.
+          sed 's/\r$//' startup.sh > deploy/startup.sh
           cd deploy
           zip -r ../voicelab-prod.zip .
+
+      - name: Verify deployment artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            'backend/app/main.py'
+            'frontend/dist/index.html'
+            'startup.sh'
+            'requirements.txt'
+          )
+          listing="$(unzip -l voicelab-prod.zip)"
+          echo "$listing" | tail -n 5
+          for path in "${required[@]}"; do
+            if ! echo "$listing" | grep -F "$path" >/dev/null; then
+              echo "::error::Missing required path in voicelab-prod.zip: $path"
+              exit 1
+            fi
+            echo "OK: $path"
+          done
+          if echo "$listing" | grep -E '(^|/).python_packages(/|$)|(^|/)antenv(/|$)' >/dev/null; then
+            echo "::error::Package must not contain .python_packages or antenv (Oryx builds antenv)"
+            exit 1
+          fi
+
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicelab-prod
+          path: voicelab-prod.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: voicelab-prod
 
       - name: Sign in to Azure with GitHub OIDC
         uses: azure/login@v2
@@ -72,14 +116,20 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_18201DE120B044889389130FE024BC74 }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_B949D3BC6DCA4646BD06F2206414232B }}
 
-      - name: Configure App Service production settings
+      - name: Configure App Service for Oryx build
         shell: bash
         run: |
-          az webapp config set \
+          set -euo pipefail
+          # Drop portable-migration settings that block Oryx/antenv.
+          az webapp config appsettings delete \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
-            --startup-file "bash startup.sh" \
-            --always-on true
+            --setting-names \
+              WEBSITE_RUN_FROM_PACKAGE \
+              PYTHONPATH \
+              ENABLE_ORYX_BUILD \
+            --output none || true
+
           az webapp config appsettings set \
             --resource-group "$AZURE_RESOURCE_GROUP" \
             --name "$AZURE_WEBAPP_NAME" \
@@ -97,7 +147,22 @@ jobs:
               ASR_PROVIDER=azure \
               ASR_DEPLOYMENT=gpt-4o-transcribe \
               ASR_LANGUAGE=ar \
-              REALTIME_ASR_DEPLOYMENT=gpt-realtime-whisper
+              REALTIME_ASR_DEPLOYMENT=gpt-realtime-whisper \
+            --output none
+
+          az webapp config set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --startup-file "bash startup.sh" \
+            --always-on true \
+            --output none
+
+      - name: Mark deploy start time
+        id: deploy-timing
+        shell: bash
+        run: |
+          echo "start_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "Deploy started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
       - name: Deploy application package
         uses: azure/webapps-deploy@v3
@@ -105,3 +170,68 @@ jobs:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
           slot-name: Production
           package: voicelab-prod.zip
+
+      - name: Re-apply Oryx settings after deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # azure/webapps-deploy may set WEBSITE_RUN_FROM_PACKAGE=1; that prevents
+          # Oryx from extracting/building antenv the way the stable path needs.
+          az webapp config appsettings delete \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --setting-names WEBSITE_RUN_FROM_PACKAGE PYTHONPATH ENABLE_ORYX_BUILD \
+            --output none || true
+          az webapp config appsettings set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true \
+            --output none
+          az webapp config set \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --startup-file "bash startup.sh" \
+            --output none
+
+      - name: Restart App Service
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Restarting ${AZURE_WEBAPP_NAME} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          az webapp restart \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME"
+          # Give Oryx time to build antenv on first boot after zip extract.
+          sleep 60
+
+      - name: Health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST="$(az webapp show \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query defaultHostName -o tsv)"
+          URL="https://${HOST}/"
+          echo "Health check URL: ${URL}"
+          for i in $(seq 1 24); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 "$URL" || true)"
+            echo "Attempt ${i}/24 -> HTTP ${code}"
+            if [[ "$code" == "200" ]]; then
+              echo "Health check passed"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Health check failed for ${URL}"
+          exit 1
+
+      - name: Log deployment duration
+        if: always()
+        shell: bash
+        run: |
+          START_EPOCH="${{ steps.deploy-timing.outputs.start_epoch }}"
+          if [[ -n "$START_EPOCH" ]]; then
+            ELAPSED=$(( $(date +%s) - START_EPOCH ))
+            echo "Deploy phase elapsed: ${ELAPSED}s"
+          fi
