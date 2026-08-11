@@ -642,10 +642,12 @@ def test_generation_stream_emits_candidates_incrementally(monkeypatch):
 
     assert events[0]["type"] == "start"
     assert sum(event["type"] == "candidate" for event in events) == 7
-    assert events[-1] == {
-        "type": "complete",
-        "model": "test-model",
-        "count": 7,
-        "requested": 7,
-        "failed_batches": 0,
-    }
+    assert events[-1]["type"] == "complete"
+    assert events[-1]["model"] == "test-model"
+    assert events[-1]["count"] == 7
+    assert events[-1]["requested"] == 7
+    assert events[-1]["failed_batches"] == 0
+    assert "diversity_issues" in events[-1]
+    assert events[0]["type"] == "start"
+    assert "scenario_plan" in events[0]
+    assert len(events[0]["scenario_plan"]) == 7
