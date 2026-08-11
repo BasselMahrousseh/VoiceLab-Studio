@@ -44,6 +44,10 @@ export default function PerformanceDashboardView({
           </div>
         </div>
       </Section>
+<<<<<<< Updated upstream
+=======
+      
+>>>>>>> Stashed changes
 
       <Section title="Recording status">
         <div className="dash-kpi-grid">
@@ -53,9 +57,21 @@ export default function PerformanceDashboardView({
           <KpiCard label="Total takes" value={fmtNum(quality.total)} />
           <KpiCard label="Acceptance %" value={`${fmtNum(quality.acceptance_rate, 1)}%`} />
           <KpiCard
+<<<<<<< Updated upstream
             label="Hours recorded"
             value={fmtNum(data.productivity.hours_recorded, 2)}
           />
+=======
+  label="Time recorded"
+  value={(() => {
+    const rawHours = Number(data?.productivity?.hours_recorded) || 0;
+    const totalSec = Math.round(rawHours * 3600);
+    const mins = Math.floor(totalSec / 60);
+    const secs = totalSec % 60;
+    return `${mins}m ${secs.toString().padStart(2, "0")}s`;
+  })()}
+/>
+>>>>>>> Stashed changes
         </div>
       </Section>
 
