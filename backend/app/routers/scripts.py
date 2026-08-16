@@ -17,7 +17,9 @@ from ..schemas import (
     ScriptOut,
     ScriptPatch,
 )
+from ..services import emirati_dialect as emirati
 from ..services import llm_scripts
+from ..services import scenario_planner
 from ..services import text_normalize as tn
 from ..services import text_policy
 
@@ -349,7 +351,10 @@ def generate(
             "AZURE_OPENAI_API_KEY and LLM_DEPLOYMENT in .env",
         )
     try:
-        items = llm_scripts.generate_scripts(_generation_params(params, db), settings)
+        gen_params = _generation_params(params, db)
+        llm_scripts.ensure_scenario_plan(gen_params)
+        plan = gen_params.get("scenario_plan") or []
+        items = llm_scripts.generate_scripts(gen_params, settings)
     except Exception as exc:
         raise HTTPException(502, f"LLM generation failed: {type(exc).__name__}: {exc}")
 
@@ -358,15 +363,60 @@ def generate(
         tn.normalize_arabic(t) for (t,) in db.query(Script.training_text).all()
     ]
     batch_hashes: set[str] = set()
-    results = [
-        llm_scripts.validate_item(item, existing_hashes, existing_texts, batch_hashes)
-        for item in items
-    ]
+    gender = emirati.normalize_speaker_gender(
+        getattr(params, "speaker_gender", None) or gen_params.get("speaker_gender")
+    )
+    gen_params["speaker_gender"] = gender
+    batch_scenario_ids: set[str] = set()
+    results = []
+    for i, slot in enumerate(plan):
+        item = items[i] if i < len(items) else {}
+        result = llm_scripts.validate_planned_item(
+            item,
+            slot,
+            existing_hashes=existing_hashes,
+            existing_texts=existing_texts,
+            batch_hashes=batch_hashes,
+            batch_scenario_ids=batch_scenario_ids,
+            speaker_gender=gender,
+        )
+        attempts = 0
+        while (
+            not result["ok"]
+            and attempts < llm_scripts.MAX_ITEM_RETRIES
+            and llm_scripts.is_retryable_validation(result)
+        ):
+            try:
+                item = llm_scripts.regenerate_single_item(
+                    slot, gen_params, settings, result.get("errors") or []
+                )
+            except Exception as exc:
+                result.setdefault("errors", []).append(
+                    f"regeneration failed: {type(exc).__name__}: {exc}"
+                )
+                break
+            result = llm_scripts.validate_planned_item(
+                item,
+                slot,
+                existing_hashes=existing_hashes,
+                existing_texts=existing_texts,
+                batch_hashes=batch_hashes,
+                batch_scenario_ids=batch_scenario_ids,
+                speaker_gender=gender,
+            )
+            attempts += 1
+        results.append(result)
+    diversity_issues = llm_scripts.validate_generation_batch(
+        results, scenario_plan=plan
+    )
     return {
         "model": settings.llm_deployment,
         "batch_name": params.batch_name,
         "count": len(results),
         "candidates": results,
+        "diversity_issues": diversity_issues,
+        "scenario_plan": gen_params.get("scenario_plan") or [],
+        "speaker_gender": gender,
     }
 
 
@@ -404,22 +454,34 @@ def generate_stream(
         for offset in range(0, requested, batch_size)
     ]
     base_params = _generation_params(params, db)
+    base_params["speaker_gender"] = emirati.normalize_speaker_gender(
+        base_params.get("speaker_gender")
+    )
+    # Plan the full request once, then hand each parallel mini-batch its slice
+    # so the 75/25 mix and scenario rotation stay correct globally.
+    full_plan = llm_scripts.ensure_scenario_plan({**base_params, "count": requested})
+    speaker_gender = base_params["speaker_gender"]
 
     def line(event: dict) -> str:
         return json.dumps(event, ensure_ascii=False) + "\n"
 
     def generate_batch(index: int, count: int) -> tuple[int, list[dict]]:
+        offset = sum(batch_counts[:index])
+        plan_slice = scenario_planner.slice_plan(full_plan, offset, count)
         batch_params = {
             **base_params,
             "count": count,
+            "scenario_plan": plan_slice,
+            "plan_offset": offset,
             "batch_name": f"{params.batch_name} · part {index + 1}",
         }
         return index, llm_scripts.generate_scripts(batch_params, settings)
 
     def events():
         batch_hashes: set[str] = set()
-        emitted = 0
+        batch_scenario_ids: set[str] = set()
         failures: list[str] = []
+        collected: list[dict | None] = [None] * requested
         executor = ThreadPoolExecutor(max_workers=min(3, len(batch_counts)))
         futures = {
             executor.submit(generate_batch, index, count)
@@ -432,12 +494,21 @@ def generate_stream(
                     "model": settings.llm_deployment,
                     "requested": requested,
                     "batches": len(batch_counts),
+                    "speaker_gender": speaker_gender,
+                    "scenario_plan": full_plan,
+                    "plan_summary": scenario_planner.summarize_plan(
+                        [
+                            scenario_planner.slot_from_dict(s)
+                            for s in full_plan
+                        ]
+                    ),
                 }
             )
             pending = set(futures)
-            while pending and emitted < requested:
+            while pending:
                 done, pending = wait(pending, timeout=3, return_when=FIRST_COMPLETED)
                 if not done:
+                    emitted = sum(1 for c in collected if c is not None)
                     yield line(
                         {
                             "type": "heartbeat",
@@ -456,22 +527,61 @@ def generate_stream(
                         yield line({"type": "batch_error", "message": message})
                         continue
 
-                    for item in items:
-                        if emitted >= requested:
+                    offset = sum(batch_counts[:batch_index])
+                    for item_idx, item in enumerate(items):
+                        slot_idx = offset + item_idx
+                        if slot_idx >= len(full_plan):
                             break
-                        candidate = llm_scripts.validate_item(
-                            item, existing_hashes, existing_texts, batch_hashes
+                        slot = full_plan[slot_idx]
+                        result = llm_scripts.validate_planned_item(
+                            item,
+                            slot,
+                            existing_hashes=existing_hashes,
+                            existing_texts=existing_texts,
+                            batch_hashes=batch_hashes,
+                            batch_scenario_ids=batch_scenario_ids,
+                            speaker_gender=speaker_gender,
                         )
-                        emitted += 1
+                        attempts = 0
+                        while (
+                            not result["ok"]
+                            and attempts < llm_scripts.MAX_ITEM_RETRIES
+                            and llm_scripts.is_retryable_validation(result)
+                        ):
+                            try:
+                                item = llm_scripts.regenerate_single_item(
+                                    slot,
+                                    base_params,
+                                    settings,
+                                    result.get("errors") or [],
+                                )
+                            except Exception as exc:
+                                result.setdefault("errors", []).append(
+                                    f"regeneration failed: {type(exc).__name__}: {exc}"
+                                )
+                                break
+                            result = llm_scripts.validate_planned_item(
+                                item,
+                                slot,
+                                existing_hashes=existing_hashes,
+                                existing_texts=existing_texts,
+                                batch_hashes=batch_hashes,
+                                batch_scenario_ids=batch_scenario_ids,
+                                speaker_gender=speaker_gender,
+                            )
+                            attempts += 1
+                        collected[slot_idx] = result
                         yield line(
                             {
                                 "type": "candidate",
-                                "index": emitted - 1,
+                                "index": slot_idx,
                                 "batch": batch_index + 1,
-                                "candidate": candidate,
+                                "candidate": result,
                             }
                         )
 
+            emitted = sum(1 for c in collected if c is not None)
+            ordered = [c for c in collected if c is not None]
             if emitted == 0 and failures:
                 yield line(
                     {
@@ -487,6 +597,9 @@ def generate_stream(
                         "count": emitted,
                         "requested": requested,
                         "failed_batches": len(failures),
+                        "diversity_issues": llm_scripts.validate_generation_batch(
+                            ordered, scenario_plan=full_plan
+                        ),
                     }
                 )
         finally:

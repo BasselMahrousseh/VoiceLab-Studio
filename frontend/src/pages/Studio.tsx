@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, upload } from "../api";
 import { formatDuration } from "../App";
-import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
+import { listInputDevices, requestInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
 import LevelMeter from "../components/LevelMeter";
 import QcPanel from "../components/QcPanel";
 import Waveform from "../components/Waveform";
@@ -82,6 +82,25 @@ export default function Studio({
   }, [session, loadNext]);
 
   useEffect(() => () => recorder.current?.close(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshDevices = async () => {
+      try {
+        const devs = await requestInputDevices();
+        if (!cancelled) setDevices(devs);
+      } catch {
+        const devs = await listInputDevices();
+        if (!cancelled) setDevices(devs);
+      }
+    };
+    void refreshDevices();
+    navigator.mediaDevices?.addEventListener("devicechange", refreshDevices);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refreshDevices);
+    };
+  }, []);
 
   // --- recording -----------------------------------------------------------
   const ensureRecorder = useCallback(async (): Promise<StudioRecorder> => {

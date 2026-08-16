@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -232,6 +233,30 @@ class GenerateParams(BaseModel):
     policy_text: str = ""
     # Target average spoken duration per clip (seconds); steers sentence length.
     avg_duration_sec: float = Field(default=0.0, ge=0, le=60)
+    # Intended speaker gender for generation + Emirati consistency checks.
+    speaker_gender: Literal["any", "male", "female"] = "any"
+    # When true (default), reserve ~25% of the batch for non-telecom general talk.
+    include_general: bool = True
+
+    @field_validator("speaker_gender", mode="before")
+    @classmethod
+    def _normalize_speaker_gender(cls, value: object) -> str:
+        # Accept legacy aliases so older clients keep working.
+        if value is None or value == "":
+            return "any"
+        raw = str(value).strip().lower()
+        aliases = {
+            "unspecified": "any",
+            "none": "any",
+            "neutral": "any",
+            "masculine": "male",
+            "m": "male",
+            "man": "male",
+            "feminine": "female",
+            "f": "female",
+            "woman": "female",
+        }
+        return aliases.get(raw, raw)
 
 
 class FlagIn(BaseModel):

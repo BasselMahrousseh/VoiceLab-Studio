@@ -211,6 +211,7 @@ function GenerateModal({
     topics: "",
     brand_terms: "",
     batch_name: `batch_${new Date().toISOString().slice(0, 10)}`,
+    speaker_gender: "any" as "any" | "male" | "female",
   });
   const [candidates, setCandidates] = useState<GenerateCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -291,6 +292,23 @@ function GenerateModal({
               ))}
             </select>
           </label>
+          <label>
+            Speaker gender
+            <select
+              className="input"
+              value={params.speaker_gender}
+              onChange={(e) =>
+                setParams({
+                  ...params,
+                  speaker_gender: e.target.value as "any" | "male" | "female",
+                })
+              }
+            >
+              <option value="any">Any / Not specified</option>
+              <option value="male">Male</option>
+              <option value="female">Female</option>
+            </select>
+          </label>
           <label className="span2">
             Styles
             <MultiSelect options={status?.enums.styles ?? []} value={params.styles} onChange={(v) => setParams({ ...params, styles: v })} />
@@ -335,6 +353,13 @@ function GenerateModal({
           <div className="row spread">
             <span className="muted small">
               {selected.size} of {candidates.length} selected · errors are disabled · review warnings before import
+              {" · "}
+              Speaker gender:{" "}
+              {params.speaker_gender === "any"
+                ? "Any"
+                : params.speaker_gender === "male"
+                  ? "Male"
+                  : "Female"}
             </span>
             <button className="link-btn" onClick={() => setCandidates(null)}>
               ← back to settings

@@ -23,6 +23,7 @@ DOMAINS = [
     "billing",
     "technical_support",
     "sales",
+    "hr",
     "numbers_dates",
     "general",
     "other",

@@ -1,7 +1,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { get, patch as apiPatch, post, upload } from "../api";
 import { useAuth } from "../auth";
-import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
+import { listInputDevices, requestInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
 import Logo from "../components/Logo";
 import LevelMeter from "../components/LevelMeter";
 import Waveform from "../components/Waveform";
@@ -117,6 +117,26 @@ export default function Recorder() {
   }, [ctx?.session_id, deviceId, devices]);
 
   useEffect(() => () => recorder.current?.close(), []);
+
+  // Load microphones on mount (permission unlocks full device list + labels).
+  useEffect(() => {
+    let cancelled = false;
+    const refreshDevices = async () => {
+      try {
+        const devs = await requestInputDevices();
+        if (!cancelled) setDevices(devs);
+      } catch {
+        const devs = await listInputDevices();
+        if (!cancelled) setDevices(devs);
+      }
+    };
+    void refreshDevices();
+    navigator.mediaDevices?.addEventListener("devicechange", refreshDevices);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refreshDevices);
+    };
+  }, []);
 
   useEffect(() => {
     setConnection("checking");

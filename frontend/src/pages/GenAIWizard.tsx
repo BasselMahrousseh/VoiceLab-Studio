@@ -16,6 +16,28 @@ const LANGUAGE_OPTIONS = [
   { value: "mixed", label: "Mixed", help: "Generate natural Arabic + English code-switched sentences." },
 ] as const;
 
+const SPEAKER_GENDER_OPTIONS = [
+  {
+    value: "any",
+    label: "Any",
+    help: "Do not constrain gendered wording.",
+  },
+  {
+    value: "male",
+    label: "Male",
+    help: "Prefer male-speaker wording (e.g. ربعي).",
+  },
+  {
+    value: "female",
+    label: "Female",
+    help: "Prefer female-speaker wording when gender matters.",
+  },
+] as const;
+
+function speakerGenderLabel(value: string): string {
+  return SPEAKER_GENDER_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
+
 const DIALECT_OPTIONS: Record<string, Array<{ value: string; label: string; help: string }>> = {
   "ar-AE": [
     { value: "emirati", label: "Emirati Arabic", help: "Natural UAE spoken Arabic." },
@@ -65,10 +87,11 @@ export default function GenAIWizard({
     target_sample_count: dataset?.target_sample_count || 200,
     avg_duration_sec: dataset?.target_avg_duration_sec || 6,
     styles: ["neutral"] as string[],
-    domains: ["customer_support", "telecom", "billing", "technical_support", "sales"] as string[],
+    domains: ["customer_support", "telecom", "billing", "technical_support", "sales", "hr"] as string[],
     topics: "",
     brand_terms: "e&, du, eLife, 5G",
     generate_count: 30,
+    speaker_gender: "any" as "any" | "male" | "female",
   });
   const [candidates, setCandidates] = useState<GenerateCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -149,6 +172,7 @@ export default function GenAIWizard({
           brand_terms: plan.brand_terms,
           avg_duration_sec: plan.avg_duration_sec,
           batch_name: `${plan.name} · AI batch`,
+          speaker_gender: plan.speaker_gender,
         },
         (event) => {
           if (event.model) setModel(event.model);
@@ -314,6 +338,27 @@ export default function GenAIWizard({
                     </div>
                   </div>
                 </div>
+                <div className="span2">
+                  <div className="field-label">
+                    Speaker Gender
+                    <div className="selection-grid">
+                      {SPEAKER_GENDER_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`selection-card ${plan.speaker_gender === option.value ? "selected" : ""}`}
+                          onClick={() => set({ speaker_gender: option.value })}
+                        >
+                          <span className="selection-title">{option.label}</span>
+                          <span className="selection-help">{option.help}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <span className="muted small">
+                      Controls gender-specific wording when applicable. Select Any when gender should not be constrained.
+                    </span>
+                  </div>
+                </div>
                 {!dataset && (
                   <label className="span2">
                     Description (optional)
@@ -388,12 +433,14 @@ export default function GenAIWizard({
                       { value: "billing",          label: "Billing & Payments" },
                       { value: "technical_support",label: "Technical Support" },
                       { value: "sales",            label: "Sales & Offers" },
+                      { value: "hr",               label: "HR / Workplace" },
                     ]}
                     value={plan.domains}
                     onChange={(v) => set({ domains: v.length ? v : ["customer_support"] })}
                   />
                   <span className="muted small">
                     The remaining 25% will always be everyday general sentences (greetings, family, shopping…).
+                    HR/workplace sentences are also scheduled automatically inside the business 75%.
                   </span>
                 </label>
                 <label className="span2">
@@ -468,6 +515,14 @@ export default function GenAIWizard({
 
       {step === "review" && candidates && (
         <>
+          <div className="banner info small">
+            Generation settings:{" "}
+            <b>{languageLabel(selectedLanguage)}</b>
+            {" · "}
+            Dialect: <b>{plan.dialect}</b>
+            {" · "}
+            Speaker gender: <b>{speakerGenderLabel(plan.speaker_gender)}</b>
+          </div>
           <div className="row spread">
             <span className="muted small">
               {busy
