@@ -728,9 +728,7 @@ export default function Recorder() {
               </div>
             ) : (
               <>
-                {/* SIDE-BY-SIDE GRID CONTAINER */}
                 <div style={{ display: "flex", flexDirection: "row", gap: "24px", width: "100%", maxWidth: "1400px", margin: "0 auto", alignItems: "stretch" }}>
-                  {/* LEFT COLUMN: Prompt Panel */}
                   <div
                     className="panel prompt-panel fade-in"
                     style={{ flex: "1", margin: 0, display: "flex", flexDirection: "column", justifyContent: "space-between" }}
@@ -808,7 +806,6 @@ export default function Recorder() {
                     {script!.notes && <div className="muted small note-line">📝 {script!.notes}</div>}
                   </div>
 
-                  {/* RIGHT COLUMN: Record Panel */}
                   <div className="panel record-panel" style={{ flex: "1", margin: 0 }}>
                     {(phase === "ready" || phase === "recording" || phase === "processing") && (
                       <>
