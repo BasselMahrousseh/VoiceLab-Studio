@@ -410,11 +410,7 @@ export default function Recorder() {
     }
   }, [beginWorkflow, loadDashboard, script, rec, resetTake, updateWorkflowStep]);
 
-<<<<<<< Updated upstream
-  // keyboard: Space = record/stop, Enter = save, R = restart, S = skip
-=======
-  // Keyboard listeners: Space = Record, Enter = Save, R = Restart, S = Skip, E = Edit text
->>>>>>> Stashed changes
+// Keyboard listeners: Space = Record, Enter = Save, R = Restart, S = Skip, E = Edit text
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -442,11 +438,7 @@ export default function Recorder() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-<<<<<<< Updated upstream
-  }, [startRecording, stopRecording, save, restart, skip, rec]);
-=======
-  }, [startRecording, stopRecording, save, restart, skip, rec, script]);
->>>>>>> Stashed changes
+}, [startRecording, stopRecording, save, restart, skip, rec, script]);
 
   const progress = ctx?.progress;
   const pct = progress && progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
@@ -580,11 +572,7 @@ export default function Recorder() {
         </div>
       )}
 
-<<<<<<< Updated upstream
-      <main className="recorder-main">
-=======
-      <main className="recorder-main" style={{ maxWidth: '1200px', width: '95%', margin: '0 auto' }}>
->>>>>>> Stashed changes
+<main className="recorder-main" style={{ maxWidth: '1200px', width: '95%', margin: '0 auto' }}>
         {roomToneMessage && <div className="banner info">{roomToneMessage}</div>}
         {error && <div className="banner error">{error}</div>}
 
@@ -644,7 +632,6 @@ export default function Recorder() {
           </div>
         ) : (
           <>
-<<<<<<< Updated upstream
             <div className="panel prompt-panel fade-in" key={script!.id}>
               <div className="row spread">
                 <div className="prompt-label muted small">Please read aloud</div>
@@ -729,7 +716,7 @@ export default function Recorder() {
                       <span className="muted small">
                         Press <kbd>Space</kbd> to {phase === "recording" ? "stop" : "start"}
                       </span>
-=======
+
             {/* SIDE-BY-SIDE GRID CONTAINER */}
             <div style={{ display: 'flex', flexDirection: 'row', gap: '24px', width: '100%', maxWidth: '1400px', margin: '0 auto', alignItems: 'stretch' }}>
               
@@ -748,8 +735,7 @@ export default function Recorder() {
                         >
                           ✎ Edit text <kbd>E</kbd>
                         </button>
-                      )}
->>>>>>> Stashed changes
+)}
                     </div>
                     {phase === "ready" && (
                       <button className="btn ghost" onClick={skip}>
@@ -757,7 +743,6 @@ export default function Recorder() {
                       </button>
                     )}
                   </div>
-<<<<<<< Updated upstream
                   <LevelMeter recorder={recorder.current} active={phase === "recording"} />
                   {phase === "processing" && (
                     <WorkflowCard
@@ -816,7 +801,6 @@ export default function Recorder() {
               {phase === "transition" && (
                 <WorkflowCard title={workflowTitle} steps={workflowSteps} />
               )}
-=======
 
                   {editingText ? (
                     <>
@@ -953,8 +937,6 @@ export default function Recorder() {
                   <WorkflowCard title={workflowTitle} steps={workflowSteps} />
                 )}
               </div>
-
->>>>>>> Stashed changes
             </div>
 
             <div className="recorder-footer">
@@ -997,11 +979,9 @@ function formatTimer(sec: number): string {
 }
 
 function formatRemainingTime(sec: number): string {
-<<<<<<< Updated upstream
   if (sec < 60) return `${Math.max(1, sec)} sec`;
   const min = Math.round(sec / 60);
   return `${min} min`;
-=======
   if (!sec || sec <= 0) return "0m 00s";
   const hrs = Math.floor(sec / 3600);
   const min = Math.floor((sec % 3600) / 60);
@@ -1011,7 +991,7 @@ function formatRemainingTime(sec: number): string {
     return `${hrs}h ${min}m ${s}s`;
   }
   return `${min}m ${s.toString().padStart(2, "0")}s`;
->>>>>>> Stashed changes
+
 }
 
 function ConnectionPill({ state }: { state: ConnectionState }) {
@@ -1071,10 +1051,8 @@ function ShortcutBar() {
       <span><kbd>Enter</kbd> Save</span>
       <span><kbd>R</kbd> Restart</span>
       <span><kbd>S</kbd> Skip</span>
-<<<<<<< Updated upstream
-=======
+
       <span><kbd>E</kbd> Edit</span>
->>>>>>> Stashed changes
     </div>
   );
 }
@@ -1191,8 +1169,7 @@ function qualityIcon(tone: "ok" | "warn" | "bad"): string {
   if (tone === "ok") return "●";
   if (tone === "warn") return "▲";
   return "■";
-<<<<<<< Updated upstream
+
 }
-=======
 }
->>>>>>> Stashed changes
+
