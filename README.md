@@ -1,7 +1,10 @@
 # e& Lahja Studio
 
-A scripted **Emirati voice-recording and dataset-quality platform** for building
-high-quality Arabic audio-text pairs for TTS / voice-cloning fine-tuning.
+A scripted **multilingual voice-recording and dataset-quality platform** for
+building high-quality Arabic, English, and code-switched audio-text pairs for
+TTS / voice-cloning fine-tuning, with first-class Emirati dialect governance.
+
+Current application version: **0.3.1**.
 
 Core pipeline:
 
@@ -17,7 +20,7 @@ Login is required. Two roles:
 
 - **Admin** (data scientist) — builds datasets, writes recording instructions,
   creates recorder accounts, and gets the full app (Datasets, Team, Studio,
-  Scripts, Review, Export, Settings).
+  Script library, Review, Export, Settings).
 - **Recorder** — reads scripts aloud in a stripped-down view: the next sentence,
   a big Record button, then **Save & next** or **Restart**. Each recorder is
   tied to one voice (Speaker) and one assigned dataset.
@@ -31,8 +34,23 @@ password from the **Team** page immediately. See the auth section in
 Detailed technical docs live in [`docs/`](docs/README.md):
 
 - [Architecture](docs/ARCHITECTURE.md) — components, request flows, audio pipeline, diagrams
+- [Product reevaluation](docs/PRODUCT_REEVALUATION.md) — feature boundaries, v0.2 corrections, production priorities
 - [Tech stack](docs/TECH_STACK.md) — every technology, versions, and rationale
 - [Data & storage](docs/DATA_AND_STORAGE.md) — where data is saved, the database, full schema
+
+Lifecycle controls:
+
+- Use **Add with AI** on any dataset card to stream, review, and append a new
+  generated batch without changing existing scripts or recordings.
+- Administrators can permanently delete non-default datasets after moving or
+  deleting assigned recorders. This removes the dataset's scripts, recording
+  metadata, and stored audio.
+- Administrators can delete other user accounts. Historical speaker and
+  recording identity is preserved for corpus traceability.
+- Recorders can skip a sentence and return to it later. If automatic QC
+  produces a false failure, **Save anyway** records an explicit human override,
+  keeps the original QC evidence, advances recorder progress, and surfaces the
+  take in Review.
 
 ## Quick start
 
@@ -60,18 +78,18 @@ plus the Vite dev server on http://localhost:5173 (proxying `/api`).
 
 ## Workflow
 
-1. **Datasets page** (admin) — create a dataset: name, dialect, **recording
-   instructions** shown to recorders, and its scripts (paste one sentence per
-   line, or JSONL). Open a dataset to add more scripts and to create the
-   recorder accounts assigned to it.
+1. **Datasets page** (admin) — the project/work-unit owner. Create a dataset
+   with its allowed languages, Arabic dialect, global + dataset-specific text
+   policy, recording instructions, targets and scripts. Paste multilingual
+   lines or generate reviewed candidates live with AI. Assign recorders here.
 2. **Team page** (admin) — manage all users: add admins/recorders, reset
    passwords, enable/disable accounts, reassign a recorder's dataset.
 3. **Recorder view** — what a recorder sees after login: the dataset's
    instructions, the next sentence to read, a Record button (Space), then
    **Save & next** (Enter) or **Restart** (R). Progress bar tracks completion.
-4. **Scripts page** — generate candidates with the LLM (styles, domains,
-   dialect, coverage targets, brand lexicon, topic seeds), review validation
-   flags, import the good ones. Or import your own lines (plain text / JSONL).
+4. **Script library** — search, filter, audit and edit utterances across
+   datasets. Creation and AI generation stay on the owning dataset so scripts
+   cannot lose their policy, language context, or project ownership.
 5. **Studio page** — full-featured recording for admins: start a session, run a
    **room-tone check**, then record:
    one script at a time, Space to record/stop, live level meter with clip
@@ -80,7 +98,8 @@ plus the Vite dev server on http://localhost:5173 (proxying `/api`).
 6. **Review page** — everything pending or flagged (QC warnings, ASR
    mismatches) with playback, metric details, script-vs-ASR diff, and
    transcript editing (reviewer-approved, marked `text_edited`).
-7. **Export page** — accepted takes → `dataset/…/wavs/*.wav` (mono PCM-16 at
+7. **Export page** — select one dataset; accepted takes →
+   `dataset/…/wavs/*.wav` (mono PCM-16 at
    the target rate) + `metadata.csv` + `metadata.jsonl` + `qc_report.json` +
    dataset card, optionally zipped.
 

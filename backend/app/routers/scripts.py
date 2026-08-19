@@ -1,10 +1,15 @@
+import json
+import secrets
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
 from ..db import get_db
-from ..deps import require_admin
+from ..deps import get_current_user, require_admin
 from ..models import Recording, Script
 from ..schemas import (
     FlagIn,
@@ -13,10 +18,25 @@ from ..schemas import (
     ScriptOut,
     ScriptPatch,
 )
+from ..services import emirati_dialect as emirati
 from ..services import llm_scripts
+from ..services import scenario_planner
 from ..services import text_normalize as tn
+from ..services import text_policy
 
 router = APIRouter(prefix="/scripts", tags=["scripts"])
+
+
+def _generation_params(params: GenerateParams, db: Session) -> dict:
+    data = params.model_dump()
+    if data.get("variation_seed") is None:
+        data["variation_seed"] = secrets.randbelow(2_147_483_648)
+    additions = data.get("policy_text", "").strip()
+    policy = text_policy.get_policy(db)
+    if additions:
+        policy += "\n\n## Dataset-specific additions\n\n" + additions
+    data["policy_text"] = policy
+    return data
 
 
 def _script_out(db: Session, s: Script) -> ScriptOut:
@@ -37,6 +57,7 @@ def create_scripts_from_items(
     generation_batch: str | None = None,
     generation_model: str | None = None,
     allow_warnings: bool = True,
+    allowed_languages: set[str] | None = None,
 ) -> tuple[list[Script], list[dict]]:
     """Validate and persist a batch of script items. Shared by the /scripts
     import endpoint and dataset creation. Returns (imported, skipped)."""
@@ -48,6 +69,11 @@ def create_scripts_from_items(
     skipped: list[dict] = []
     for item in items:
         v = llm_scripts.validate_item(item, existing_hashes, existing_texts, batch_hashes)
+        if allowed_languages and v["computed"]["language"] not in allowed_languages:
+            v["ok"] = False
+            v["errors"].append(
+                f"language '{v['computed']['language']}' is not enabled for this dataset"
+            )
         if not v["ok"] or (v["warnings"] and not allow_warnings):
             skipped.append(
                 {
@@ -64,7 +90,7 @@ def create_scripts_from_items(
             display_text=c["display_text"],
             training_text=c["training_text"],
             msa_equivalent=c["msa_equivalent"],
-            language=settings.default_language,
+            language=c["language"],
             dialect=c["dialect"],
             style=c["style"],
             domain=c["domain"],
@@ -94,6 +120,7 @@ def list_scripts(
     style: str | None = None,
     domain: str | None = None,
     dialect: str | None = None,
+    language: str | None = None,
     dataset_id: int | None = None,
     search: str | None = None,
     active: bool | None = None,
@@ -110,6 +137,8 @@ def list_scripts(
         q = q.filter(Script.domain == domain)
     if dialect:
         q = q.filter(Script.dialect == dialect)
+    if language:
+        q = q.filter(Script.language == language)
     if dataset_id is not None:
         q = q.filter(Script.dataset_id == dataset_id)
     if active is not None:
@@ -126,6 +155,100 @@ def list_scripts(
     total = q.count()
     items = q.order_by(Script.id.desc()).offset(offset).limit(limit).all()
     return {"total": total, "items": [_script_out(db, s) for s in items]}
+
+
+@router.get("/download")
+def download_scripts(
+    dataset_id: int | None = None,
+    fmt: str = Query(default="csv", alias="format", pattern="^(txt|jsonl|csv)$"),
+    db: Session = Depends(get_db),
+):
+    """Stream all active scripts for a dataset.
+
+    - ``format=csv``   — CSV with columns: script_id, display_text, training_text,
+                         language, dialect, style, domain, tags, status, notes
+    - ``format=txt``   — one display_text per line (UTF-8, good for pasting back)
+    - ``format=jsonl`` — one JSON object per line with all script fields
+    """
+    import csv
+    import io
+
+    q = db.query(Script).filter(
+        Script.active.is_(True),
+        Script.status.notin_(["flagged", "retired"]),
+    )
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
+    scripts = q.order_by(Script.id).all()
+
+    slug = f"dataset_{dataset_id}" if dataset_id else "all_scripts"
+    filename = f"{slug}_scripts.{fmt}"
+
+    if fmt == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow([
+            "script_id", "display_text", "training_text",
+            "language", "dialect", "style", "domain", "tags", "status", "notes",
+        ])
+        for s in scripts:
+            writer.writerow([
+                s.script_id,
+                s.display_text,
+                s.training_text,
+                s.language,
+                s.dialect,
+                s.style,
+                s.domain,
+                "|".join(s.tags or []),
+                s.status,
+                s.notes or "",
+            ])
+        content = buf.getvalue().encode("utf-8-sig")  # utf-8-sig for Excel compat
+        from fastapi.responses import Response as _Resp
+        return _Resp(
+            content,
+            media_type="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+            },
+        )
+
+    if fmt == "jsonl":
+        lines = (
+            json.dumps(
+                {
+                    "script_id": s.script_id,
+                    "display_text": s.display_text,
+                    "training_text": s.training_text,
+                    "language": s.language,
+                    "dialect": s.dialect,
+                    "style": s.style,
+                    "domain": s.domain,
+                    "tags": s.tags or [],
+                    "notes": s.notes,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+            for s in scripts
+        )
+        media_type = "application/x-ndjson"
+    else:
+        lines = (s.display_text + "\n" for s in scripts)
+        media_type = "text/plain; charset=utf-8"
+
+    return StreamingResponse(
+        lines,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @router.get("/stats")
@@ -147,6 +270,7 @@ def script_stats(db: Session = Depends(get_db)):
         "by_style": group(Script.style),
         "by_domain": group(Script.domain),
         "by_dialect": group(Script.dialect),
+        "by_language": group(Script.language),
         "by_length": group(Script.length_bucket),
         "accepted_recordings": accepted[0],
         "accepted_duration_sec": round(accepted[1], 1),
@@ -158,6 +282,7 @@ def next_script(
     exclude_id: int | None = None,
     style: str | None = None,
     domain: str | None = None,
+    dataset_id: int | None = None,
     db: Session = Depends(get_db),
 ):
     q = db.query(Script).filter(
@@ -169,6 +294,8 @@ def next_script(
         q = q.filter(Script.style == style)
     if domain:
         q = q.filter(Script.domain == domain)
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
     # 'new' scripts first (cover unrecorded content), then re-record leftovers
     s = (
         q.filter(Script.status == "new").order_by(Script.priority, Script.id).first()
@@ -178,12 +305,13 @@ def next_script(
 
 
 @router.get("/queue-count")
-def queue_count(db: Session = Depends(get_db)):
-    remaining = (
-        db.query(func.count(Script.id))
-        .filter(Script.active.is_(True), Script.status.in_(["new", "recorded"]))
-        .scalar()
+def queue_count(dataset_id: int | None = None, db: Session = Depends(get_db)):
+    q = db.query(func.count(Script.id)).filter(
+        Script.active.is_(True), Script.status.in_(["new", "recorded"])
     )
+    if dataset_id is not None:
+        q = q.filter(Script.dataset_id == dataset_id)
+    remaining = q.scalar()
     return {"remaining": remaining}
 
 
@@ -226,7 +354,10 @@ def generate(
             "AZURE_OPENAI_API_KEY and LLM_DEPLOYMENT in .env",
         )
     try:
-        items = llm_scripts.generate_scripts(params.model_dump(), settings)
+        gen_params = _generation_params(params, db)
+        llm_scripts.ensure_scenario_plan(gen_params)
+        plan = gen_params.get("scenario_plan") or []
+        items = llm_scripts.generate_scripts(gen_params, settings)
     except Exception as exc:
         raise HTTPException(502, f"LLM generation failed: {type(exc).__name__}: {exc}")
 
@@ -235,16 +366,289 @@ def generate(
         tn.normalize_arabic(t) for (t,) in db.query(Script.training_text).all()
     ]
     batch_hashes: set[str] = set()
-    results = [
-        llm_scripts.validate_item(item, existing_hashes, existing_texts, batch_hashes)
-        for item in items
-    ]
+    gender = emirati.normalize_speaker_gender(
+        getattr(params, "speaker_gender", None) or gen_params.get("speaker_gender")
+    )
+    gen_params["speaker_gender"] = gender
+    batch_scenario_ids: set[str] = set()
+    results = []
+    for i, slot in enumerate(plan):
+        item = items[i] if i < len(items) else {}
+        result = llm_scripts.validate_planned_item(
+            item,
+            slot,
+            existing_hashes=existing_hashes,
+            existing_texts=existing_texts,
+            batch_hashes=batch_hashes,
+            batch_scenario_ids=batch_scenario_ids,
+            speaker_gender=gender,
+        )
+        attempts = 0
+        while (
+            not result["ok"]
+            and attempts < llm_scripts.MAX_ITEM_RETRIES
+            and llm_scripts.is_retryable_validation(result)
+        ):
+            try:
+                item = llm_scripts.regenerate_single_item(
+                    slot, gen_params, settings, result.get("errors") or []
+                )
+            except Exception as exc:
+                result.setdefault("errors", []).append(
+                    f"regeneration failed: {type(exc).__name__}: {exc}"
+                )
+                break
+            result = llm_scripts.validate_planned_item(
+                item,
+                slot,
+                existing_hashes=existing_hashes,
+                existing_texts=existing_texts,
+                batch_hashes=batch_hashes,
+                batch_scenario_ids=batch_scenario_ids,
+                speaker_gender=gender,
+            )
+            attempts += 1
+        results.append(result)
+    diversity_issues = llm_scripts.validate_generation_batch(
+        results, scenario_plan=plan
+    )
     return {
         "model": settings.llm_deployment,
         "batch_name": params.batch_name,
         "count": len(results),
         "candidates": results,
+        "diversity_issues": diversity_issues,
+        "scenario_plan": gen_params.get("scenario_plan") or [],
+        "speaker_gender": gender,
     }
+
+
+@router.post("/generate/stream")
+def generate_stream(
+    params: GenerateParams,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    _: object = Depends(require_admin),
+):
+    """Stream candidate scripts as newline-delimited JSON.
+
+    Generation is split into small parallel batches so the browser receives
+    useful records as soon as the first batch is ready. Heartbeats keep the
+    App Service connection active while the model is thinking. Nothing is
+    persisted until the administrator reviews and imports the candidates.
+    """
+    if not settings.llm_configured():
+        raise HTTPException(
+            503,
+            "LLM endpoint is not configured. Set AZURE_OPENAI_ENDPOINT, "
+            "AZURE_OPENAI_API_KEY and LLM_DEPLOYMENT in .env",
+        )
+
+    existing_hashes = {h for (h,) in db.query(Script.normalized_hash).all()}
+    existing_texts = [
+        tn.normalize_arabic(t) for (t,) in db.query(Script.training_text).all()
+    ]
+    requested = params.count
+    # Five records is a good balance: the first result arrives quickly without
+    # turning a 30-record generation into 30 separate model requests.
+    batch_size = min(5, requested)
+    batch_counts = [
+        min(batch_size, requested - offset)
+        for offset in range(0, requested, batch_size)
+    ]
+    base_params = _generation_params(params, db)
+    base_params["speaker_gender"] = emirati.normalize_speaker_gender(
+        base_params.get("speaker_gender")
+    )
+    # Plan the full request once, then hand each parallel mini-batch its slice
+    # so the 75/25 mix and scenario rotation stay correct globally.
+    full_plan = llm_scripts.ensure_scenario_plan({**base_params, "count": requested})
+    speaker_gender = base_params["speaker_gender"]
+
+    def line(event: dict) -> str:
+        return json.dumps(event, ensure_ascii=False) + "\n"
+
+    def generate_batch(index: int, count: int) -> tuple[int, list[dict]]:
+        offset = sum(batch_counts[:index])
+        plan_slice = scenario_planner.slice_plan(full_plan, offset, count)
+        batch_params = {
+            **base_params,
+            "count": count,
+            "scenario_plan": plan_slice,
+            "plan_offset": offset,
+            "batch_name": f"{params.batch_name} · part {index + 1}",
+        }
+        return index, llm_scripts.generate_scripts(batch_params, settings)
+
+    def events():
+        batch_hashes: set[str] = set()
+        batch_scenario_ids: set[str] = set()
+        failures: list[str] = []
+        collected: list[dict | None] = [None] * requested
+        executor = ThreadPoolExecutor(max_workers=min(3, len(batch_counts)))
+        futures = {
+            executor.submit(generate_batch, index, count)
+            for index, count in enumerate(batch_counts)
+        }
+        try:
+            yield line(
+                {
+                    "type": "start",
+                    "model": settings.llm_deployment,
+                    "requested": requested,
+                    "batches": len(batch_counts),
+                    "speaker_gender": speaker_gender,
+                    "temperature": base_params.get("temperature"),
+                    "variation_seed": base_params.get("variation_seed"),
+                    "scenario_plan": full_plan,
+                    "plan_summary": scenario_planner.summarize_plan(
+                        [
+                            scenario_planner.slot_from_dict(s)
+                            for s in full_plan
+                        ]
+                    ),
+                }
+            )
+            pending = set(futures)
+            while pending:
+                done, pending = wait(pending, timeout=3, return_when=FIRST_COMPLETED)
+                if not done:
+                    emitted = sum(1 for c in collected if c is not None)
+                    yield line(
+                        {
+                            "type": "heartbeat",
+                            "generated": emitted,
+                            "requested": requested,
+                        }
+                    )
+                    continue
+
+                for future in done:
+                    try:
+                        batch_index, items = future.result()
+                    except Exception as exc:
+                        message = f"{type(exc).__name__}: {exc}"
+                        failures.append(message)
+                        yield line({"type": "batch_error", "message": message})
+                        continue
+
+                    offset = sum(batch_counts[:batch_index])
+                    for item_idx, item in enumerate(items):
+                        slot_idx = offset + item_idx
+                        if slot_idx >= len(full_plan):
+                            break
+                        slot = full_plan[slot_idx]
+                        result = llm_scripts.validate_planned_item(
+                            item,
+                            slot,
+                            existing_hashes=existing_hashes,
+                            existing_texts=existing_texts,
+                            batch_hashes=batch_hashes,
+                            batch_scenario_ids=batch_scenario_ids,
+                            speaker_gender=speaker_gender,
+                        )
+                        attempts = 0
+                        while (
+                            not result["ok"]
+                            and attempts < llm_scripts.MAX_ITEM_RETRIES
+                            and llm_scripts.is_retryable_validation(result)
+                        ):
+                            try:
+                                item = llm_scripts.regenerate_single_item(
+                                    slot,
+                                    base_params,
+                                    settings,
+                                    result.get("errors") or [],
+                                )
+                            except Exception as exc:
+                                result.setdefault("errors", []).append(
+                                    f"regeneration failed: {type(exc).__name__}: {exc}"
+                                )
+                                break
+                            result = llm_scripts.validate_planned_item(
+                                item,
+                                slot,
+                                existing_hashes=existing_hashes,
+                                existing_texts=existing_texts,
+                                batch_hashes=batch_hashes,
+                                batch_scenario_ids=batch_scenario_ids,
+                                speaker_gender=speaker_gender,
+                            )
+                            attempts += 1
+                        collected[slot_idx] = result
+                        yield line(
+                            {
+                                "type": "candidate",
+                                "index": slot_idx,
+                                "batch": batch_index + 1,
+                                "candidate": result,
+                            }
+                        )
+
+            emitted = sum(1 for c in collected if c is not None)
+            ordered = [c for c in collected if c is not None]
+            if emitted == 0 and failures:
+                yield line(
+                    {
+                        "type": "error",
+                        "message": "All generation batches failed: " + "; ".join(failures),
+                    }
+                )
+            else:
+                yield line(
+                    {
+                        "type": "complete",
+                        "model": settings.llm_deployment,
+                        "count": emitted,
+                        "requested": requested,
+                        "failed_batches": len(failures),
+                        "diversity_issues": llm_scripts.validate_generation_batch(
+                            ordered, scenario_plan=full_plan
+                        ),
+                    }
+                )
+        finally:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    return StreamingResponse(
+        events(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.patch("/{script_pk}/text", response_model=ScriptOut)
+def patch_script_text(
+    script_pk: int,
+    payload: ScriptPatch,
+    db: Session = Depends(get_db),
+    user=Depends(get_current_user),
+):
+    """Allow any authenticated user (including recorders) to correct only the
+    display_text and/or training_text of a script.  All other fields are ignored
+    so recorders cannot change status, domain, priority, etc."""
+    s = db.get(Script, script_pk)
+    if not s:
+        raise HTTPException(404, "Script not found")
+    data = payload.model_dump(exclude_unset=True)
+    # Restrict recorders to text-only edits; admins may use the full PATCH below.
+    if user.role != "admin":
+        allowed = {"display_text", "training_text"}
+        data = {k: v for k, v in data.items() if k in allowed}
+    for key, value in data.items():
+        setattr(s, key, value)
+    if "training_text" in data:
+        s.normalized_hash = tn.normalized_hash(s.training_text)
+        s.length_bucket = tn.length_bucket(s.training_text)
+        s.word_count = tn.word_count(s.training_text)
+        s.char_count = len(s.training_text)
+    db.commit()
+    return _script_out(db, s)
 
 
 @router.patch("/{script_pk}", response_model=ScriptOut)
@@ -252,12 +656,16 @@ def patch_script(
     script_pk: int,
     payload: ScriptPatch,
     db: Session = Depends(get_db),
-    _: object = Depends(require_admin),
+    user=Depends(get_current_user),
 ):
     s = db.get(Script, script_pk)
     if not s:
         raise HTTPException(404, "Script not found")
     data = payload.model_dump(exclude_unset=True)
+    # Recorders may correct only the text fields; admins can patch everything.
+    if user.role != "admin":
+        allowed = {"display_text", "training_text"}
+        data = {k: v for k, v in data.items() if k in allowed}
     for key, value in data.items():
         setattr(s, key, value)
     if "training_text" in data:

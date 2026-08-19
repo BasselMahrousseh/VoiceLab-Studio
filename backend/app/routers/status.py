@@ -7,11 +7,15 @@ from ..db import get_db
 from ..models import (
     DIALECTS,
     DOMAINS,
+    LANGUAGES,
     STYLES,
     Recording,
     RecordingSession,
     Script,
 )
+from ..deps import require_admin
+from ..schemas import PolicyUpdate
+from ..services import text_policy
 
 router = APIRouter(tags=["status"])
 
@@ -43,16 +47,31 @@ def app_status(db: Session = Depends(get_db), settings: Settings = Depends(get_s
         "accepted_count": accepted[0],
         "accepted_duration_sec": round(accepted[1], 1),
         "active_session_id": active_session.id if active_session else None,
-        "enums": {"styles": STYLES, "domains": DOMAINS, "dialects": DIALECTS},
+        "enums": {
+            "styles": STYLES,
+            "domains": DOMAINS,
+            "dialects": DIALECTS,
+            "languages": LANGUAGES,
+        },
         "export_sample_rate": settings.export_sample_rate,
     }
 
 
 @router.get("/policy")
-def policy_text():
-    from pathlib import Path
+def policy_text(db: Session = Depends(get_db)):
+    return {
+        "text": text_policy.get_policy(db),
+        "default_text": text_policy.default_policy(),
+    }
 
-    for candidate in [Path("POLICY.md"), Path("../POLICY.md")]:
-        if candidate.exists():
-            return {"text": candidate.read_text(encoding="utf-8")}
-    return {"text": "POLICY.md not found."}
+
+@router.patch("/policy")
+def update_policy(
+    payload: PolicyUpdate,
+    db: Session = Depends(get_db),
+    _: object = Depends(require_admin),
+):
+    return {
+        "text": text_policy.save_policy(db, payload.text),
+        "default_text": text_policy.default_policy(),
+    }

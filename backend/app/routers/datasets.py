@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from ..config import Settings, get_settings
 from ..db import get_db
 from ..deps import require_admin
-from ..models import Dataset, Recording, Script, User
+from ..models import LANGUAGES, Dataset, Recording, Script, User
+from ..services import storage
 from ..schemas import (
     AddScriptsIn,
     DatasetCreate,
@@ -41,7 +42,13 @@ def _unique_slug(db: Session, name: str) -> str:
 def dataset_out(db: Session, ds: Dataset) -> DatasetOut:
     out = DatasetOut.model_validate(ds)
     out.script_count = (
-        db.query(func.count(Script.id)).filter(Script.dataset_id == ds.id).scalar()
+        db.query(func.count(Script.id))
+        .filter(
+            Script.dataset_id == ds.id,
+            Script.active.is_(True),
+            Script.status.notin_(["flagged", "retired"]),
+        )
+        .scalar()
     )
     accepted = (
         db.query(
@@ -68,13 +75,19 @@ def list_datasets(db: Session = Depends(get_db)):
 
 @router.post("", response_model=DatasetOut)
 def create_dataset(payload: DatasetCreate, db: Session = Depends(get_db)):
+    languages = list(dict.fromkeys(payload.languages or [payload.language]))
+    invalid = [language for language in languages if language not in LANGUAGES]
+    if invalid:
+        raise HTTPException(400, f"Unsupported dataset language tags: {', '.join(invalid)}")
     ds = Dataset(
         slug=_unique_slug(db, payload.name),
         name=payload.name.strip(),
         description=payload.description,
         instructions=payload.instructions,
         dialect=payload.dialect,
-        language=payload.language,
+        language=languages[0],
+        languages=languages,
+        text_policy=payload.text_policy.strip(),
         target_sample_count=payload.target_sample_count,
         target_avg_duration_sec=payload.target_avg_duration_sec,
     )
@@ -97,11 +110,105 @@ def patch_dataset(dataset_id: int, payload: DatasetPatch, db: Session = Depends(
     ds = db.get(Dataset, dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "languages" in data:
+        languages = list(dict.fromkeys(data["languages"] or []))
+        if not languages:
+            raise HTTPException(400, "Select at least one dataset language")
+        invalid = [language for language in languages if language not in LANGUAGES]
+        if invalid:
+            raise HTTPException(400, f"Unsupported dataset language tags: {', '.join(invalid)}")
+        existing_languages = {
+            language
+            for (language,) in db.query(Script.language)
+            .filter(Script.dataset_id == dataset_id)
+            .distinct()
+            .all()
+        }
+        excluded = existing_languages - set(languages)
+        if excluded:
+            raise HTTPException(
+                409,
+                "Cannot remove language tags already used by scripts: "
+                + ", ".join(sorted(excluded)),
+            )
+        data["languages"] = languages
+        ds.language = languages[0]
+    for key, value in data.items():
         setattr(ds, key, value)
     db.commit()
     db.refresh(ds)
     return dataset_out(db, ds)
+
+
+@router.delete("/{dataset_id}")
+def delete_dataset(
+    dataset_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    """Permanently delete a dataset and its corpus data.
+
+    Recorder accounts are deliberately not cascaded: an administrator must
+    move or delete them first so an account cannot silently lose its work.
+    Historical recording sessions and speakers remain as audit identities, but
+    recordings belonging to this dataset and their audio masters are removed.
+    """
+    ds = db.get(Dataset, dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+
+    assigned_users = (
+        db.query(func.count(User.id)).filter(User.dataset_id == dataset_id).scalar() or 0
+    )
+    if assigned_users:
+        raise HTTPException(
+            409,
+            f"Move or delete the {assigned_users} assigned recorder account(s) before deleting this dataset",
+        )
+
+    scripts = db.query(Script).filter(Script.dataset_id == dataset_id).all()
+    script_ids = [script.id for script in scripts]
+    recordings = (
+        db.query(Recording).filter(Recording.script_pk.in_(script_ids)).all()
+        if script_ids
+        else []
+    )
+    audio_paths = list(dict.fromkeys(recording.rel_path for recording in recordings))
+    recording_count = len(recordings)
+    script_count = len(scripts)
+
+    if recordings:
+        db.query(Recording).filter(
+            Recording.id.in_([recording.id for recording in recordings])
+        ).delete(synchronize_session=False)
+    if scripts:
+        db.query(Script).filter(Script.id.in_(script_ids)).delete(synchronize_session=False)
+    db.delete(ds)
+    db.commit()
+
+    cleanup_failures = 0
+    for rel_path in audio_paths:
+        try:
+            storage.delete_master(settings, rel_path)
+        except Exception:
+            # The corpus is gone from the application even if an external
+            # storage cleanup is temporarily unavailable. Report the count so
+            # operators can identify that maintenance is required.
+            cleanup_failures += 1
+        # Also remove any staging copy that was never accepted (pending takes).
+        try:
+            storage.delete_pending(settings, rel_path)
+        except Exception:
+            pass
+
+    return {
+        "deleted": True,
+        "dataset_id": dataset_id,
+        "scripts_deleted": script_count,
+        "recordings_deleted": recording_count,
+        "audio_cleanup_failures": cleanup_failures,
+    }
 
 
 @router.post("/{dataset_id}/scripts")
@@ -124,6 +231,7 @@ def add_scripts(
         source="import",
         dataset_id=dataset_id,
         allow_warnings=payload.allow_warnings,
+        allowed_languages=set(ds.languages or [ds.language]),
     )
     return {"imported": len(imported), "skipped": skipped}
 
@@ -149,6 +257,7 @@ def import_scripts_into_dataset(
         generation_batch=payload.generation_batch,
         generation_model=payload.generation_model,
         allow_warnings=payload.allow_warnings,
+        allowed_languages=set(ds.languages or [ds.language]),
     )
     return {
         "imported": len(imported),
@@ -175,6 +284,7 @@ def _parse_lines(payload: AddScriptsIn) -> list[dict]:
                     "style": payload.style,
                     "domain": payload.domain,
                     "dialect": payload.dialect,
+                    "language": payload.language,
                     **obj,
                 }
             )
@@ -185,6 +295,7 @@ def _parse_lines(payload: AddScriptsIn) -> list[dict]:
                     "style": payload.style,
                     "domain": payload.domain,
                     "dialect": payload.dialect,
+                    "language": payload.language,
                 }
             )
     return items

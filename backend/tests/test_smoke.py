@@ -61,6 +61,66 @@ def test_helpers():
     assert tn.length_bucket("شو تبغي") == "short"
 
 
+def test_language_tagging_for_arabic_english_and_mixed():
+    from app.services.llm_scripts import validate_item
+
+    existing_hashes: set[str] = set()
+    existing_texts: list[str] = []
+    batch_hashes: set[str] = set()
+
+    arabic = validate_item(
+        {"display_text": "مرحبا بكم في الاستوديو", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+    english = validate_item(
+        {"display_text": "Welcome to our support team", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+    mixed = validate_item(
+        {"display_text": "أبغي أعمل upgrade للباقة", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+    brand_mixed = validate_item(
+        {"display_text": "مرحبا بكم في eLife", "language": "auto"},
+        existing_hashes,
+        existing_texts,
+        batch_hashes,
+    )["computed"]
+
+    assert (arabic["language"], arabic["dialect"]) == ("ar-AE", "emirati")
+    assert (english["language"], english["dialect"]) == ("en-US", "english")
+    assert (mixed["language"], mixed["dialect"]) == ("mixed", "mixed")
+    assert (brand_mixed["language"], brand_mixed["dialect"]) == ("mixed", "mixed")
+    assert "language:en-US" in english["tags"]
+    assert {"language:mixed", "code_switch"}.issubset(mixed["tags"])
+    assert {"language:mixed", "code_switch"}.issubset(brand_mixed["tags"])
+
+
+def test_arabic_tag_rejects_latin_script_and_code_switching():
+    from app.services.llm_scripts import validate_item
+
+    result = validate_item(
+        {
+            "display_text": "أبغي أفعل data package",
+            "training_text": "أبغي أفعل data package",
+            "language": "ar-AE",
+            "dialect": "emirati",
+        },
+        set(),
+        [],
+        set(),
+    )
+
+    assert result["ok"] is False
+    assert any("fully Arabic" in error for error in result["errors"])
+
+
 # ---------------------------------------------------------------------------
 # audio QC
 # ---------------------------------------------------------------------------
@@ -249,6 +309,14 @@ def test_auth_and_recorder_flow():
     with TestClient(app) as client:
         _login(client)  # admin
 
+        # recorder accounts must always have work scoped through a dataset
+        unassigned = client.post(
+            "/api/auth/users",
+            json={"username": "unassigned", "password": "pass123", "role": "recorder"},
+        )
+        assert unassigned.status_code == 400
+        assert unassigned.json()["detail"] == "Recorder accounts must be assigned to a dataset"
+
         # admin creates a dataset with recording instructions
         ds = client.post(
             "/api/datasets",
@@ -279,6 +347,7 @@ def test_auth_and_recorder_flow():
         rec_client = TestClient(app)
         _login(rec_client, "reader1", "pass123")
         assert rec_client.get("/api/datasets").status_code == 403
+        assert rec_client.patch("/api/policy", json={"text": "not allowed"}).status_code == 403
 
         # recorder context: dataset, session and first script to read
         ctx = rec_client.get("/api/recorder/context").json()
@@ -301,3 +370,284 @@ def test_auth_and_recorder_flow():
         ctx2 = rec_client.get("/api/recorder/context").json()
         assert ctx2["progress"] == {"total": 2, "done": 1, "remaining": 1}
         assert ctx2["next_script"]["id"] != first["id"]
+
+        # an existing recorder can be moved to another populated dataset
+        second_ds = client.post(
+            "/api/datasets",
+            json={"name": "Second Recorder Assignment"},
+        ).json()
+        client.post(
+            f"/api/datasets/{second_ds['id']}/scripts",
+            json={"text": "هذه جملة جديدة للمجموعة الثانية"},
+        )
+        reassigned = client.patch(
+            f"/api/auth/users/{rec_user['id']}",
+            json={"dataset_id": second_ds["id"]},
+        ).json()
+        assert reassigned["dataset_id"] == second_ds["id"]
+        assert reassigned["dataset_name"] == second_ds["name"]
+        moved_ctx = rec_client.get("/api/recorder/context").json()
+        assert moved_ctx["dataset"]["id"] == second_ds["id"]
+        assert moved_ctx["progress"] == {"total": 1, "done": 0, "remaining": 1}
+
+        # exports are scoped to one dataset rather than mixing projects
+        scoped_export = client.post(
+            "/api/exports",
+            json={"name": "first-dataset-only", "dataset_id": ds["id"]},
+        ).json()
+        assert scoped_export["status"] == "done"
+        assert scoped_export["file_count"] == 1
+        assert scoped_export["stats"]["dataset_id"] == ds["id"]
+        assert scoped_export["stats"]["dataset_name"] == ds["name"]
+
+
+def test_editable_policy_and_multilingual_dataset():
+    with TestClient(app) as client:
+        _login(client)
+        original = client.get("/api/policy").json()["text"]
+        updated = original + "\n\n## Test addition\nUse the approved terminology list."
+        try:
+            saved = client.patch("/api/policy", json={"text": updated})
+            assert saved.status_code == 200
+            assert client.get("/api/policy").json()["text"] == updated
+
+            dataset = client.post(
+                "/api/datasets",
+                json={
+                    "name": "Arabic English Mixed Test",
+                    "languages": ["ar-AE", "en-US", "mixed"],
+                    "text_policy": "Keep service names in their official spelling.",
+                },
+            ).json()
+            assert dataset["languages"] == ["ar-AE", "en-US", "mixed"]
+            assert dataset["text_policy"].startswith("Keep service names")
+
+            added = client.post(
+                f"/api/datasets/{dataset['id']}/scripts",
+                json={
+                    "text": "مرحبا في مشروع التسجيل متعدد اللغات\nWelcome to the multilingual voice studio\nأبغي أسوي upgrade للحساب التجريبي",
+                    "language": "auto",
+                },
+            ).json()
+            assert added["imported"] == 3
+            scripts = client.get(
+                f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+            ).json()["items"]
+            assert {script["language"] for script in scripts} == {
+                "ar-AE",
+                "en-US",
+                "mixed",
+            }
+            cannot_remove_used_language = client.patch(
+                f"/api/datasets/{dataset['id']}",
+                json={"languages": ["ar-AE"]},
+            )
+            assert cannot_remove_used_language.status_code == 409
+
+            arabic_only = client.post(
+                "/api/datasets",
+                json={"name": "Arabic Only Language Guard", "languages": ["ar-AE"]},
+            ).json()
+            rejected_english = client.post(
+                f"/api/datasets/{arabic_only['id']}/scripts",
+                json={"text": "This sentence must not enter an Arabic-only dataset"},
+            ).json()
+            assert rejected_english["imported"] == 0
+            assert "not enabled" in rejected_english["skipped"][0]["errors"][0]
+        finally:
+            client.patch("/api/policy", json={"text": original})
+
+
+def test_guarded_user_and_dataset_deletion():
+    with TestClient(app) as client:
+        _login(client)
+        dataset = client.post(
+            "/api/datasets",
+            json={"name": "Disposable Dataset", "languages": ["ar-AE"]},
+        ).json()
+        added = client.post(
+            f"/api/datasets/{dataset['id']}/scripts",
+            json={"text": "هذي جملة مؤقتة للحذف"},
+        ).json()
+        assert added["imported"] == 1
+
+        recorder = client.post(
+            "/api/auth/users",
+            json={
+                "username": "disposable_recorder",
+                "password": "pass123",
+                "role": "recorder",
+                "dataset_id": dataset["id"],
+            },
+        ).json()
+
+        blocked = client.delete(f"/api/datasets/{dataset['id']}")
+        assert blocked.status_code == 409
+        assert "assigned recorder" in blocked.json()["detail"]
+
+        deleted_user = client.delete(f"/api/auth/users/{recorder['id']}")
+        assert deleted_user.status_code == 200
+        assert deleted_user.json()["speaker_id_preserved"] == recorder["speaker_id"]
+        assert all(
+            user["id"] != recorder["id"] for user in client.get("/api/auth/users").json()
+        )
+        assert any(
+            speaker["id"] == recorder["speaker_id"]
+            for speaker in client.get("/api/speakers").json()
+        )
+
+        script = client.get(
+            f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+        ).json()["items"][0]
+        speaker = client.get("/api/speakers").json()[0]
+        session = client.post(
+            "/api/sessions/start",
+            json={"speaker_id": speaker["id"], "device_info": {"test": True}},
+        ).json()
+        recording = client.post(
+            "/api/recordings",
+            data={"script_pk": script["id"], "session_id": session["id"]},
+            files={
+                "file": (
+                    "take.wav",
+                    wav_bytes(synth_speech()),
+                    "audio/wav",
+                )
+            },
+        ).json()
+        settings = get_settings()
+        # After upload the take is staged in pending_dir, not audio_dir yet.
+        pending_path = settings.resolved_pending_dir / recording["rel_path"]
+        assert pending_path.exists()
+
+        deleted_dataset = client.delete(f"/api/datasets/{dataset['id']}")
+        assert deleted_dataset.status_code == 200
+        assert deleted_dataset.json() == {
+            "deleted": True,
+            "dataset_id": dataset["id"],
+            "scripts_deleted": 1,
+            "recordings_deleted": 1,
+            "audio_cleanup_failures": 0,
+        }
+        # Both staging and permanent locations must be gone after dataset deletion.
+        assert not pending_path.exists()
+        audio_path = settings.audio_dir / recording["rel_path"]
+        assert not audio_path.exists()
+        assert client.get(f"/api/datasets/{dataset['id']}").status_code == 404
+
+        me = client.get("/api/auth/me").json()
+        assert client.delete(f"/api/auth/users/{me['id']}").status_code == 400
+        default_dataset = next(
+            item for item in client.get("/api/datasets").json() if item["slug"] == "default"
+        )
+        deleted_default = client.delete(f"/api/datasets/{default_dataset['id']}")
+        assert deleted_default.status_code == 200
+        assert deleted_default.json()["deleted"] is True
+        assert client.get(f"/api/datasets/{default_dataset['id']}").status_code == 404
+
+
+def test_failed_qc_requires_explicit_save_anyway_and_exports_override():
+    with TestClient(app) as client:
+        _login(client)
+        dataset = client.post(
+            "/api/datasets",
+            json={"name": "Forced Save Test", "languages": ["en-US"]},
+        ).json()
+        added = client.post(
+            f"/api/datasets/{dataset['id']}/scripts",
+            json={
+                "text": "Please confirm that the forced save workflow is traceable.",
+                "language": "en-US",
+            },
+        ).json()
+        assert added["imported"] == 1
+        script = client.get(
+            f"/api/scripts?dataset_id={dataset['id']}&limit=10"
+        ).json()["items"][0]
+        speaker = client.get("/api/speakers").json()[0]
+        session = client.post(
+            "/api/sessions/start",
+            json={"speaker_id": speaker["id"], "device_info": {"test": True}},
+        ).json()
+        recording = client.post(
+            "/api/recordings",
+            data={"script_pk": script["id"], "session_id": session["id"]},
+            files={
+                "file": (
+                    "short.wav",
+                    wav_bytes(synth_speech(duration=0.5, lead=0.05, trail=0.05)),
+                    "audio/wav",
+                )
+            },
+        ).json()
+        assert recording["qc_status"] == "failed"
+        assert recording["forced_save"] is False
+
+        blocked = client.post(f"/api/recordings/{recording['id']}/accept", json={})
+        assert blocked.status_code == 409
+        forced = client.post(
+            f"/api/recordings/{recording['id']}/accept",
+            json={"force": True, "note": "Listened to the full take."},
+        )
+        assert forced.status_code == 200
+        assert forced.json()["human_status"] == "accepted"
+        assert forced.json()["forced_save"] is True
+        assert "Saved anyway" in forced.json()["review_note"]
+
+        exported = client.post(
+            "/api/exports",
+            json={"name": "forced-save-export", "dataset_id": dataset["id"]},
+        ).json()
+        assert exported["file_count"] == 1
+        assert client.delete(f"/api/datasets/{dataset['id']}").status_code == 200
+
+
+def test_generation_stream_emits_candidates_incrementally(monkeypatch):
+    settings = get_settings().model_copy(
+        update={
+            "azure_openai_endpoint": "https://example.openai.azure.com",
+            "azure_openai_api_key": "test-key",
+            "llm_deployment": "test-model",
+        }
+    )
+    serial = iter(range(100))
+
+    def fake_generate(params, _settings):
+        return [
+            {
+                "display_text": f"جملة اختبار رقم {next(serial)}",
+                "style": "neutral",
+                "domain": "general",
+                "dialect": "emirati",
+            }
+            for _ in range(params["count"])
+        ]
+
+    from app.services import llm_scripts
+
+    monkeypatch.setattr(llm_scripts, "generate_scripts", fake_generate)
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        with TestClient(app) as client:
+            _login(client)
+            with client.stream(
+                "POST",
+                "/api/scripts/generate/stream",
+                json={"count": 7, "batch_name": "stream test"},
+            ) as response:
+                assert response.status_code == 200
+                events = [json.loads(line) for line in response.iter_lines() if line]
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+
+    assert events[0]["type"] == "start"
+    assert sum(event["type"] == "candidate" for event in events) == 7
+    assert events[-1]["type"] == "complete"
+    assert events[-1]["model"] == "test-model"
+    assert events[-1]["count"] == 7
+    assert events[-1]["requested"] == 7
+    assert events[-1]["failed_batches"] == 0
+    assert "diversity_issues" in events[-1]
+    assert events[0]["type"] == "start"
+    assert "scenario_plan" in events[0]
+    assert len(events[0]["scenario_plan"]) == 7

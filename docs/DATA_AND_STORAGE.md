@@ -102,7 +102,10 @@ erDiagram
 | slug | str, unique | url-safe key |
 | name, description | str | |
 | instructions | text | shown to recorders |
-| language, dialect | str | e.g. `ar-AE`, `emirati` |
+| language | str | legacy primary language |
+| languages | JSON list | allowed `ar-AE`, `en-US`, and/or `mixed` |
+| dialect | str | default Arabic dialect, e.g. `emirati` |
+| text_policy | text | additions layered on the global policy |
 | status | str | `active` \| `archived` |
 | target_sample_count | int | planning target (samples) |
 | target_avg_duration_sec | float | planning target (avg clip length) |
@@ -127,8 +130,8 @@ erDiagram
 | display_text | text | what the reader sees (digits allowed) |
 | training_text | text | exact verbalization (numbers as words) |
 | msa_equivalent | text | metadata only |
-| language, dialect, style, domain | str | classification |
-| tags | JSON | e.g. `["numbers","code_switch"]` |
+| language, dialect, style, domain | str | per-sentence classification |
+| tags | JSON | includes `language:<tag>`, e.g. `language:en-US` |
 | length_bucket, word_count, char_count | | derived |
 | status | str | `new`/`recorded`/`done`/`flagged`/`retired` |
 | active, priority | bool/int | queue control |

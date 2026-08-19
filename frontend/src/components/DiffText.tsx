@@ -5,7 +5,7 @@ export default function DiffText({ reference, hypothesis }: { reference: string;
   const ops = diffWords(reference.split(" ").filter(Boolean), hypothesis.split(" ").filter(Boolean));
   if (ops.every((o) => o.type === "same")) return null;
   return (
-    <div className="arabic diff-text" dir="rtl">
+    <div className="arabic diff-text" dir="auto">
       {ops.map((op, i) =>
         op.type === "same" ? (
           <span key={i}>{op.word} </span>

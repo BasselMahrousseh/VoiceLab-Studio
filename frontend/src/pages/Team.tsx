@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { get, patch, post } from "../api";
+import { get, patch, post, remove } from "../api";
 import { useAuth } from "../auth";
 import { Modal, Spinner } from "../components/widgets";
 import { Dataset, User } from "../types";
@@ -10,11 +10,13 @@ export default function Team() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [resetFor, setResetFor] = useState<User | null>(null);
+  const [deleteFor, setDeleteFor] = useState<User | null>(null);
+  const [savingDatasetFor, setSavingDatasetFor] = useState<number | null>(null);
   const [error, setError] = useState("");
 
   const load = useCallback(() => {
     get<User[]>("/api/auth/users").then(setUsers).catch((e) => setError(e.message));
-    get<Dataset[]>("/api/datasets").then(setDatasets).catch(() => undefined);
+    get<Dataset[]>("/api/datasets").then(setDatasets).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -24,6 +26,19 @@ export default function Team() {
       load();
     } catch (e) {
       setError((e as Error).message);
+    }
+  };
+
+  const assignDataset = async (u: User, datasetId: number) => {
+    setSavingDatasetFor(u.id);
+    setError("");
+    try {
+      await patch(`/api/auth/users/${u.id}`, { dataset_id: datasetId });
+      load();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSavingDatasetFor(null);
     }
   };
 
@@ -60,7 +75,30 @@ export default function Team() {
               <td>
                 <span className={`chip ${u.role === "admin" ? "accent" : ""}`}>{u.role}</span>
               </td>
-              <td className="muted small">{u.dataset_name || (u.role === "recorder" ? "—" : "")}</td>
+              <td className="muted small">
+                {u.role === "recorder" ? (
+                  <select
+                    className="input dataset-assignment"
+                    aria-label={`Dataset for ${u.username}`}
+                    value={u.dataset_id ?? 0}
+                    disabled={savingDatasetFor === u.id}
+                    onChange={(e) => void assignDataset(u, Number(e.target.value))}
+                  >
+                    {!u.dataset_id && <option value={0}>Select dataset</option>}
+                    {datasets.map((d) => (
+                      <option
+                        key={d.id}
+                        value={d.id}
+                        disabled={d.script_count === 0 && d.id !== u.dataset_id}
+                      >
+                        {d.name} · {d.script_count} scripts
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  ""
+                )}
+              </td>
               <td className="muted small">{u.last_login_at ? new Date(u.last_login_at).toLocaleString() : "never"}</td>
               <td>
                 <span className={`chip ${u.active ? "ok" : "off"}`}>{u.active ? "active" : "disabled"}</span>
@@ -71,9 +109,14 @@ export default function Team() {
                     reset password
                   </button>
                   {u.id !== me?.id && (
-                    <button className="link-btn" onClick={() => toggleActive(u)}>
-                      {u.active ? "disable" : "enable"}
-                    </button>
+                    <>
+                      <button className="link-btn" onClick={() => toggleActive(u)}>
+                        {u.active ? "disable" : "enable"}
+                      </button>
+                      <button className="link-btn danger-link" onClick={() => setDeleteFor(u)}>
+                        delete
+                      </button>
+                    </>
                   )}
                 </div>
               </td>
@@ -86,6 +129,16 @@ export default function Team() {
         <AddUserModal datasets={datasets} onClose={() => setAddOpen(false)} onAdded={() => { load(); setAddOpen(false); }} />
       )}
       {resetFor && <ResetModal user={resetFor} onClose={() => setResetFor(null)} onDone={() => setResetFor(null)} />}
+      {deleteFor && (
+        <DeleteUserModal
+          user={deleteFor}
+          onClose={() => setDeleteFor(null)}
+          onDeleted={() => {
+            setDeleteFor(null);
+            load();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -99,16 +152,24 @@ function AddUserModal({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const eligibleDatasets = datasets.filter((d) => d.status === "active" && d.script_count > 0);
+  const defaultDatasetId = eligibleDatasets[0]?.id ?? 0;
   const [form, setForm] = useState({
     username: "",
     password: "",
     display_name: "",
     role: "recorder",
-    dataset_id: datasets[0]?.id ?? 0,
+    dataset_id: defaultDatasetId,
     speaker_key: "",
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!form.dataset_id && defaultDatasetId) {
+      setForm((current) => ({ ...current, dataset_id: defaultDatasetId }));
+    }
+  }, [defaultDatasetId, form.dataset_id]);
 
   const submit = async () => {
     setBusy(true);
@@ -160,9 +221,9 @@ function AddUserModal({
               Assigned dataset
               <select className="input" value={form.dataset_id} onChange={(e) => setForm({ ...form, dataset_id: Number(e.target.value) })}>
                 <option value={0}>— none —</option>
-                {datasets.map((d) => (
+                {eligibleDatasets.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.name}
+                    {d.name} · {d.script_count} scripts
                   </option>
                 ))}
               </select>
@@ -175,8 +236,20 @@ function AddUserModal({
         )}
       </div>
       {error && <div className="banner error">{error}</div>}
-      <div className="row gap" style={{ marginTop: 12 }}>
-        <button className="btn accept" onClick={submit} disabled={busy || !form.username || form.password.length < 4}>
+      {form.role === "recorder" && !eligibleDatasets.length && (
+        <div className="banner warn">Create an active dataset with scripts before adding a recorder.</div>
+      )}
+      <div className="row gap modal-actions">
+        <button
+          className="btn accept"
+          onClick={submit}
+          disabled={
+            busy ||
+            !form.username.trim() ||
+            form.password.length < 4 ||
+            (form.role === "recorder" && !form.dataset_id)
+          }
+        >
           {busy ? <Spinner label="Creating…" /> : "Create user"}
         </button>
         <button className="btn ghost" onClick={onClose}>
@@ -224,6 +297,64 @@ function ResetModal({ user, onClose, onDone }: { user: User; onClose: () => void
           </div>
         </>
       )}
+    </Modal>
+  );
+}
+
+function DeleteUserModal({
+  user,
+  onClose,
+  onDeleted,
+}: {
+  user: User;
+  onClose: () => void;
+  onDeleted: () => void;
+}) {
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await remove(`/api/auth/users/${user.id}`);
+      onDeleted();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Delete user — ${user.username}`} onClose={onClose}>
+      <div className="banner error">
+        This permanently removes the login account. Historical speaker and recording identity is
+        preserved for dataset traceability.
+      </div>
+      <label className="field">
+        <span>
+          Type <b>{user.username}</b> to confirm
+        </span>
+        <input
+          className="input"
+          value={confirmation}
+          autoFocus
+          onChange={(event) => setConfirmation(event.target.value)}
+        />
+      </label>
+      {error && <div className="banner error">{error}</div>}
+      <div className="row gap modal-actions">
+        <button
+          className="btn danger"
+          disabled={busy || confirmation !== user.username}
+          onClick={submit}
+        >
+          {busy ? <Spinner label="Deleting…" /> : "Permanently delete user"}
+        </button>
+        <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+      </div>
     </Modal>
   );
 }

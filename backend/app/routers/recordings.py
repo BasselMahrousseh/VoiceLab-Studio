@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -63,8 +63,16 @@ def upload_recording(
         db.query(func.count(Recording.id)).filter(Recording.script_pk == script_pk).scalar()
         + 1
     )
-    rel_path = storage.take_rel_path(session.speaker.speaker_key, script.script_id, take_number)
-    storage.save_master(settings, rel_path, content)
+    dataset_title = script.dataset.name if script.dataset else "unassigned"
+    rel_path = storage.take_rel_path(
+        session.speaker.speaker_key,
+        dataset_title,
+        script.script_id,
+        take_number,
+    )
+    # Stage locally only — nothing written to Azure Blob until the recorder
+    # explicitly clicks Save/Accept (see accept_recording below).
+    storage.save_pending(settings, rel_path, content)
 
     qc = analyze_recording(audio, settings, raw_bytes=content)
 
@@ -114,6 +122,7 @@ def list_recordings(
     qc_status: str | None = None,
     asr_status: str | None = None,
     script_pk: int | None = None,
+    dataset_id: int | None = None,
     session_id: int | None = None,
     needs_review: bool = False,
     limit: int = 50,
@@ -129,6 +138,10 @@ def list_recordings(
         q = q.filter(Recording.asr_status == asr_status)
     if script_pk:
         q = q.filter(Recording.script_pk == script_pk)
+    if dataset_id:
+        q = q.join(Script, Recording.script_pk == Script.id).filter(
+            Script.dataset_id == dataset_id
+        )
     if session_id:
         q = q.filter(Recording.session_id == session_id)
     if needs_review:
@@ -163,20 +176,53 @@ def recording_audio(
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
-    path = storage.abs_audio_path(settings, r.rel_path)
-    if not path.exists():
-        raise HTTPException(404, "Audio file missing on disk")
-    return FileResponse(path, media_type="audio/wav", filename=path.name)
+    try:
+        # Accepted takes live in permanent storage; pending takes are still in
+        # the local staging area.
+        if r.human_status == "pending":
+            content = storage.read_pending(settings, r.rel_path)
+        else:
+            content = storage.read_master(settings, r.rel_path)
+    except Exception as exc:
+        raise HTTPException(404, f"Audio file unavailable: {exc}")
+    filename = r.rel_path.rsplit("/", 1)[-1]
+    return Response(
+        content,
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
 
 
 @router.post("/{rec_id}/accept", response_model=RecordingOut)
-def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_db)):
+def accept_recording(
+    rec_id: int,
+    payload: AcceptIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
+    if r.qc_status == "failed" and not payload.force:
+        raise HTTPException(
+            409,
+            "Automatic QC failed. Re-record this take or explicitly use Save anyway.",
+        )
+    # Promote from local staging area to permanent storage (Azure Blob or local
+    # audio dir) only now that the recorder has explicitly clicked Save/Accept.
+    try:
+        storage.promote_to_master(settings, r.rel_path)
+    except FileNotFoundError:
+        # Pending file missing (e.g. duplicate accept call) — treat as already
+        # promoted; don't block acceptance.
+        pass
     r.human_status = "accepted"
     r.reviewed_at = datetime.now(timezone.utc)
-    r.review_note = payload.note
+    r.forced_save = r.qc_status == "failed" and payload.force
+    forced_note = "Saved anyway despite failed automatic QC."
+    r.review_note = (
+        f"{forced_note} {payload.note}".strip() if r.forced_save else payload.note
+    )
     if payload.final_text is not None and payload.final_text.strip() != r.script.training_text:
         r.final_text = payload.final_text.strip()
         r.text_edited = True
@@ -190,10 +236,18 @@ def accept_recording(rec_id: int, payload: AcceptIn, db: Session = Depends(get_d
 
 
 @router.post("/{rec_id}/reject", response_model=RecordingOut)
-def reject_recording(rec_id: int, payload: RejectIn, db: Session = Depends(get_db)):
+def reject_recording(
+    rec_id: int,
+    payload: RejectIn,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
     r = db.get(Recording, rec_id)
     if not r:
         raise HTTPException(404, "Recording not found")
+    # The take was only in the local staging area — delete it from there.
+    # Nothing ever reached Azure Blob for a pending take, so no blob cleanup needed.
+    storage.delete_pending(settings, r.rel_path)
     r.human_status = "rejected"
     r.reviewed_at = datetime.now(timezone.utc)
     r.review_note = payload.note
@@ -218,8 +272,16 @@ def verify_recording(
             "ASR endpoint is not configured. Set ASR_DEPLOYMENT (and endpoint/key "
             "if different from the LLM resource) in .env",
         )
-    wav = storage.abs_audio_path(settings, r.rel_path)
-    result = verify_against_script(wav, r.script.training_text, settings)
+    try:
+        wav = storage.read_master(settings, r.rel_path)
+    except Exception as exc:
+        raise HTTPException(404, f"Audio file unavailable: {exc}")
+    language = {"ar-AE": "ar", "en-US": "en", "mixed": ""}.get(
+        r.script.language, settings.asr_language
+    )
+    result = verify_against_script(
+        wav, r.script.training_text, settings, language=language
+    )
     r.asr_status = result["status"]
     r.asr_text = result["asr_text"]
     r.asr_cer = result["cer"]

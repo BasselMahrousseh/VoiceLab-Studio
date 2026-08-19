@@ -1,6 +1,7 @@
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ORMModel(BaseModel):
@@ -70,7 +71,9 @@ class DatasetOut(ORMModel):
     description: str
     instructions: str
     language: str
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str
+    text_policy: str = ""
     status: str
     target_sample_count: int = 0
     target_avg_duration_sec: float = 0.0
@@ -87,6 +90,8 @@ class DatasetCreate(BaseModel):
     instructions: str = ""
     dialect: str = "emirati"
     language: str = "ar-AE"
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
+    text_policy: str = ""
     target_sample_count: int = 0
     target_avg_duration_sec: float = 0.0
 
@@ -95,7 +100,9 @@ class DatasetPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     instructions: str | None = None
+    languages: list[str] | None = None
     dialect: str | None = None
+    text_policy: str | None = None
     status: str | None = None
     target_sample_count: int | None = None
     target_avg_duration_sec: float | None = None
@@ -108,6 +115,7 @@ class AddScriptsIn(BaseModel):
     style: str = "neutral"
     domain: str = "general"
     dialect: str = "emirati"
+    language: str = "auto"
     allow_warnings: bool = True
 
 
@@ -117,6 +125,8 @@ class RecorderContextOut(BaseModel):
     session_id: int | None
     progress: dict
     next_script: "ScriptOut | None" = None
+    room_tone_dbfs: float | None = None
+    room_tone_status: str | None = None
 
 
 class SpeakerCreate(BaseModel):
@@ -177,6 +187,7 @@ class ScriptItemIn(BaseModel):
     display_text: str
     training_text: str | None = None
     msa_equivalent: str | None = None
+    language: str = "auto"
     dialect: str = "emirati"
     style: str = "neutral"
     domain: str = "general"
@@ -197,6 +208,7 @@ class ScriptPatch(BaseModel):
     display_text: str | None = None
     training_text: str | None = None
     msa_equivalent: str | None = None
+    language: str | None = None
     dialect: str | None = None
     style: str | None = None
     domain: str | None = None
@@ -209,20 +221,70 @@ class ScriptPatch(BaseModel):
 
 class GenerateParams(BaseModel):
     count: int = Field(default=20, ge=1, le=100)
-    styles: list[str] = Field(default_factory=lambda: ["neutral", "friendly"])
+    styles: list[str] = Field(default_factory=lambda: ["neutral"])
+    genres: list[str] = Field(
+        default_factory=lambda: [
+            "transactional",
+            "troubleshooting",
+            "informational",
+            "complaint",
+            "advisory",
+            "social",
+        ]
+    )
     domains: list[str] = Field(default_factory=lambda: ["customer_support"])
+    languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str = "emirati"
     length_mix: list[str] = Field(default_factory=lambda: ["short", "medium", "long"])
     coverage: list[str] = Field(default_factory=list)
     topics: str = ""
     brand_terms: str = ""
     batch_name: str = ""
+    policy_text: str = ""
     # Target average spoken duration per clip (seconds); steers sentence length.
     avg_duration_sec: float = Field(default=0.0, ge=0, le=60)
+    # Intended speaker gender for generation + Emirati consistency checks.
+    speaker_gender: Literal["any", "male", "female"] = "any"
+    # When true (default), reserve ~25% of the batch for non-telecom general talk.
+    include_general: bool = True
+    # Higher values increase lexical and structural variation. The LLM client
+    # retries without this parameter for model deployments that do not support it.
+    temperature: float = Field(default=1.3, ge=0.0, le=2.0)
+    # Optional reproducibility control. Normal requests receive a fresh seed.
+    variation_seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
+
+    @field_validator("speaker_gender", mode="before")
+    @classmethod
+    def _normalize_speaker_gender(cls, value: object) -> str:
+        # Accept legacy aliases so older clients keep working.
+        if value is None or value == "":
+            return "any"
+        raw = str(value).strip().lower()
+        aliases = {
+            "unspecified": "any",
+            "none": "any",
+            "neutral": "any",
+            "masculine": "male",
+            "m": "male",
+            "man": "male",
+            "feminine": "female",
+            "f": "female",
+            "woman": "female",
+        }
+        return aliases.get(raw, raw)
 
 
 class FlagIn(BaseModel):
     reason: str = ""
+
+
+class RecorderSkipIn(BaseModel):
+    script_id: int
+
+
+class RecorderSkipOut(BaseModel):
+    next_script: ScriptOut | None = None
+    progress: dict = Field(default_factory=dict)
 
 
 # --- recordings ----------------------------------------------------------------
@@ -248,6 +310,7 @@ class RecordingOut(ORMModel):
     asr_detail: dict
     human_status: str
     review_note: str
+    forced_save: bool = False
     final_text: str | None
     text_edited: bool
     created_at: datetime
@@ -258,6 +321,7 @@ class RecordingOut(ORMModel):
 class AcceptIn(BaseModel):
     final_text: str | None = None  # reviewer-approved transcript override
     note: str = ""
+    force: bool = False
 
 
 class RejectIn(BaseModel):
@@ -267,6 +331,7 @@ class RejectIn(BaseModel):
 # --- exports -------------------------------------------------------------------
 class ExportParams(BaseModel):
     name: str = ""
+    dataset_id: int | None = None
     sample_rate: int | None = None
     trim_silence: bool = True
     normalize: str = "none"  # none | peak | loudness
@@ -276,6 +341,10 @@ class ExportParams(BaseModel):
     styles: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
     make_zip: bool = True
+
+
+class PolicyUpdate(BaseModel):
+    text: str = Field(min_length=1, max_length=50000)
 
 
 class ExportOut(ORMModel):
@@ -291,6 +360,76 @@ class ExportOut(ORMModel):
     dataset_version: str
     status: str
     error: str
+
+
+# --- analytics / performance dashboard ---------------------------------------
+class RecorderDeviceIn(BaseModel):
+    """Client-reported browser / mic metadata for the open session."""
+
+    browser: str | None = None
+    userAgent: str | None = None
+    deviceId: str | None = None
+    deviceLabel: str | None = None
+    microphone: str | None = None
+
+
+class InsightOut(BaseModel):
+    code: str
+    level: str  # success | warn | info
+    message: str
+
+
+class AchievementOut(BaseModel):
+    code: str
+    icon: str
+    title: str
+    earned: bool
+    detail: str = ""
+
+
+class TrendOut(BaseModel):
+    current: float | None = None
+    previous: float | None = None
+    delta: float | None = None
+    direction: str = "stable"  # improving | stable | declining
+
+
+class LeaderboardRowOut(BaseModel):
+    user_id: int
+    display_name: str
+    username: str
+    dataset_id: int | None = None
+    dataset_name: str | None = None
+    assigned: int = 0
+    completed: int = 0
+    remaining: int = 0
+    skipped: int = 0
+    accepted: int = 0
+    acceptance_rate: float = 0.0
+    avg_qc_score: float | None = None
+    avg_time_per_script_sec: float | None = None
+    hours_recorded: float = 0.0
+    current_streak: int = 0
+    total_recordings: int = 0
+
+
+class PerformanceDashboardOut(BaseModel):
+    """Single aggregated payload for recorder + admin performance views."""
+
+    profile: dict
+    progress: dict
+    quality: dict
+    activity: dict
+    productivity: dict
+    audio_quality: dict
+    insights: list[InsightOut] = Field(default_factory=list)
+    ai_insights: list[str] = Field(default_factory=list)
+    achievements: list[AchievementOut] = Field(default_factory=list)
+    session_summary: dict | None = None
+    kpis: dict = Field(default_factory=dict)
+    trends: dict = Field(default_factory=dict)
+    charts: dict = Field(default_factory=dict)
+    filters: dict = Field(default_factory=dict)
 
 
 # Resolve forward reference to ScriptOut now that it is defined.

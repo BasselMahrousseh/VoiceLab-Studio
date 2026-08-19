@@ -7,12 +7,14 @@ __pycache__/
 # Node
 frontend/node_modules/
 frontend/dist/
+.npm-cache/
 
 # Runtime data (audio, database, exports)
 data/
 
 # Environment / secrets
 .env
+.env.local
 
 # OS
 Thumbs.db

@@ -93,6 +93,8 @@ def create_user(
 
     speaker_id = None
     if payload.role == "recorder":
+        if not payload.dataset_id:
+            raise HTTPException(400, "Recorder accounts must be assigned to a dataset")
         key = (payload.speaker_key or username).strip()
         speaker = _ensure_speaker(db, key, payload.display_name)
         speaker_id = speaker.id
@@ -130,11 +132,42 @@ def patch_user(
         data.pop("password", None)
     if "active" in data and not data["active"] and user.id == admin.id:
         raise HTTPException(400, "You cannot deactivate your own account")
-    if "dataset_id" in data and data["dataset_id"] is not None:
-        if not db.get(Dataset, data["dataset_id"]):
+    if "dataset_id" in data:
+        if user.role == "recorder" and data["dataset_id"] is None:
+            raise HTTPException(400, "Recorder accounts must be assigned to a dataset")
+        if data["dataset_id"] is not None and not db.get(Dataset, data["dataset_id"]):
             raise HTTPException(404, "Assigned dataset not found")
     for key, value in data.items():
         setattr(user, key, value)
     db.commit()
     db.refresh(user)
     return user_out(db, user)
+
+
+@router.delete("/users/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    """Delete a login account without erasing historical voice identity."""
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(404, "User not found")
+    if user.id == admin.id:
+        raise HTTPException(400, "You cannot delete your own account")
+    if user.role == "admin":
+        admin_count = db.query(func.count(User.id)).filter(User.role == "admin").scalar() or 0
+        if admin_count <= 1:
+            raise HTTPException(400, "The last administrator account cannot be deleted")
+
+    username = user.username
+    speaker_id = user.speaker_id
+    db.delete(user)
+    db.commit()
+    return {
+        "deleted": True,
+        "user_id": user_id,
+        "username": username,
+        "speaker_id_preserved": speaker_id,
+    }

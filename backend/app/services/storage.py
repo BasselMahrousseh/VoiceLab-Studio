@@ -1,26 +1,253 @@
-"""File-path management for recording masters.
+"""Recording and export storage.
 
-Layout: data/audio/{speaker_key}/{script_id}/take_{n:02d}.wav
-A storage abstraction point: swap this module for an object-storage client
-(S3/OCI/Azure Blob) without touching the rest of the app.
+Layout: data/audio/{user}/{dataset_title}/{script_id}_take_{n:02d}.wav
+Azure layout inside the configured container:
+  audio/{user}/{dataset_title}/{script_id}_take_{n:02d}.wav
+  exports/{batch_slug}/...
+  database-backups/voicelab_{timestamp}.db
 """
 from __future__ import annotations
 
+import re
+from functools import lru_cache
 from pathlib import Path
+from typing import Iterator
 
 from ..config import Settings
 
 
-def take_rel_path(speaker_key: str, script_id: str, take_number: int) -> str:
-    return f"{speaker_key}/{script_id}/take_{take_number:02d}.wav"
+def _safe_rel_path(rel_path: str) -> str:
+    normalized = rel_path.replace("\\", "/").strip("/")
+    if not normalized or any(part in ("", ".", "..") for part in normalized.split("/")):
+        raise ValueError("Invalid storage path")
+    return normalized
+
+
+def _safe_folder(name: str, fallback: str = "unknown") -> str:
+    """Make a single path segment safe for local disks and Azure Blob folders."""
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "", (name or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" .")
+    return cleaned or fallback
+
+
+def _blob_name(prefix: str, rel_path: str) -> str:
+    return f"{prefix.strip('/')}/{_safe_rel_path(rel_path)}"
+
+
+@lru_cache(maxsize=8)
+def _container_client(account_url: str, container: str, client_id: str):
+    from azure.identity import DefaultAzureCredential
+    from azure.storage.blob import ContainerClient
+
+    credential = DefaultAzureCredential(
+        managed_identity_client_id=client_id or None,
+        exclude_interactive_browser_credential=True,
+    )
+    return ContainerClient(
+        account_url=account_url,
+        container_name=container,
+        credential=credential,
+    )
+
+
+def _container(settings: Settings):
+    if not settings.blob_storage_configured():
+        raise RuntimeError(
+            "Azure Blob storage is not fully configured. Set STORAGE_BACKEND, "
+            "AZURE_STORAGE_ACCOUNT_URL and AZURE_STORAGE_CONTAINER."
+        )
+    return _container_client(
+        settings.azure_storage_account_url,
+        settings.azure_storage_container,
+        settings.azure_client_id,
+    )
+
+
+def take_rel_path(
+    speaker_key: str,
+    dataset_title: str,
+    script_id: str,
+    take_number: int,
+) -> str:
+    """Build master path: {user}/{dataset title}/{script_id}_take_NN.wav."""
+    user = _safe_folder(speaker_key, fallback="speaker")
+    dataset = _safe_folder(dataset_title, fallback="dataset")
+    script = _safe_folder(script_id, fallback="script")
+    return f"{user}/{dataset}/{script}_take_{take_number:02d}.wav"
 
 
 def abs_audio_path(settings: Settings, rel_path: str) -> Path:
-    return settings.audio_dir / rel_path
+    """Return a local master path. Only valid for the local backend."""
+    if settings.storage_backend != "local":
+        raise RuntimeError("Azure Blob masters do not have a persistent local path")
+    return settings.audio_dir / _safe_rel_path(rel_path)
+
+
+def save_pending(settings: Settings, rel_path: str, content: bytes) -> Path:
+    """Write a take to the local pending staging area.
+
+    Nothing goes to Azure Blob yet.  The file is promoted (or deleted) when
+    the recorder clicks Save/Accept or Restart/Skip respectively.
+    """
+    path = settings.resolved_pending_dir / _safe_rel_path(rel_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
+def read_pending(settings: Settings, rel_path: str) -> bytes:
+    """Read back a pending (not-yet-accepted) take from the staging area."""
+    return (settings.resolved_pending_dir / _safe_rel_path(rel_path)).read_bytes()
+
+
+def delete_pending(settings: Settings, rel_path: str) -> None:
+    """Remove a pending take that was rejected / restarted."""
+    path = settings.resolved_pending_dir / _safe_rel_path(rel_path)
+    path.unlink(missing_ok=True)
+    pending_root = settings.resolved_pending_dir.resolve()
+    parent = path.parent
+    while parent != pending_root and pending_root in parent.resolve().parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
+def promote_to_master(settings: Settings, rel_path: str) -> None:
+    """Move a pending take into permanent storage (local or Azure Blob).
+
+    Called only when the recorder explicitly clicks Save/Accept.
+    """
+    content = read_pending(settings, rel_path)
+    save_master(settings, rel_path, content)
+    delete_pending(settings, rel_path)
 
 
 def save_master(settings: Settings, rel_path: str, content: bytes) -> Path:
+    if settings.storage_backend == "azure_blob":
+        from azure.storage.blob import ContentSettings
+
+        blob = _container(settings).get_blob_client(
+            _blob_name(settings.azure_storage_audio_prefix, rel_path)
+        )
+        blob.upload_blob(
+            content,
+            overwrite=True,
+            content_settings=ContentSettings(content_type="audio/wav"),
+        )
+        # Callers persist only rel_path; the returned path is for local compatibility.
+        return Path(_safe_rel_path(rel_path))
+
     path = abs_audio_path(settings, rel_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
     return path
+
+
+def read_master(settings: Settings, rel_path: str) -> bytes:
+    if settings.storage_backend == "azure_blob":
+        blob = _container(settings).get_blob_client(
+            _blob_name(settings.azure_storage_audio_prefix, rel_path)
+        )
+        return blob.download_blob().readall()
+    return abs_audio_path(settings, rel_path).read_bytes()
+
+
+def delete_master(settings: Settings, rel_path: str) -> None:
+    """Delete one recording master from the configured storage backend.
+
+    Missing files are treated as already deleted so destructive workflows can
+    be retried safely after a partial cleanup.
+    """
+    if settings.storage_backend == "azure_blob":
+        from azure.core.exceptions import ResourceNotFoundError
+
+        blob = _container(settings).get_blob_client(
+            _blob_name(settings.azure_storage_audio_prefix, rel_path)
+        )
+        try:
+            blob.delete_blob(delete_snapshots="include")
+        except ResourceNotFoundError:
+            pass
+        return
+
+    path = abs_audio_path(settings, rel_path)
+    path.unlink(missing_ok=True)
+    # Recording paths are data/audio/{user}/{dataset}/file.wav. Remove only
+    # now-empty parents and never walk above the configured audio directory.
+    audio_root = settings.audio_dir.resolve()
+    parent = path.parent
+    while parent != audio_root and audio_root in parent.resolve().parents:
+        try:
+            parent.rmdir()
+        except OSError:
+            break
+        parent = parent.parent
+
+
+def save_export_tree(settings: Settings, root: Path, batch_rel_path: str) -> None:
+    """Persist all generated export files when Blob storage is enabled."""
+    if settings.storage_backend != "azure_blob":
+        return
+    for path in root.rglob("*"):
+        if path.is_file():
+            from azure.storage.blob import ContentSettings
+
+            relative = path.relative_to(root).as_posix()
+            blob_name = _blob_name(
+                settings.azure_storage_export_prefix,
+                f"{batch_rel_path}/{relative}",
+            )
+            content_type = (
+                "application/zip"
+                if path.suffix == ".zip"
+                else "audio/wav"
+                if path.suffix == ".wav"
+                else "application/json"
+                if path.suffix in (".json", ".jsonl")
+                else "text/csv"
+                if path.suffix == ".csv"
+                else "text/markdown"
+                if path.suffix == ".md"
+                else "application/octet-stream"
+            )
+            _container(settings).get_blob_client(blob_name).upload_blob(
+                path.read_bytes(),
+                overwrite=True,
+                content_settings=ContentSettings(content_type=content_type),
+            )
+
+
+def iter_export(
+    settings: Settings, rel_path: str, chunk_size: int = 4 * 1024 * 1024
+) -> Iterator[bytes]:
+    if settings.storage_backend == "azure_blob":
+        downloader = _container(settings).get_blob_client(
+            _blob_name(settings.azure_storage_export_prefix, rel_path)
+        ).download_blob()
+        yield from downloader.chunks()
+        return
+
+    path = settings.export_dir / _safe_rel_path(rel_path)
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            yield chunk
+
+
+def save_database_backup(settings: Settings, path: Path) -> str:
+    rel_path = path.name
+    if settings.storage_backend == "azure_blob":
+        from azure.storage.blob import ContentSettings
+
+        blob_name = _blob_name(settings.azure_storage_backup_prefix, rel_path)
+        _container(settings).get_blob_client(blob_name).upload_blob(
+            path.read_bytes(),
+            overwrite=True,
+            content_settings=ContentSettings(content_type="application/x-sqlite3"),
+        )
+    else:
+        destination = settings.data_dir / "database-backups" / rel_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(path.read_bytes())
+    return rel_path

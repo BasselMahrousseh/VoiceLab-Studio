@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..config import Settings, get_settings
@@ -7,6 +7,8 @@ from ..db import get_db
 from ..models import ExportBatch
 from ..schemas import ExportOut, ExportParams
 from ..services.exporter import run_export
+from ..services import storage
+from ..services.database_backup import backup_sqlite
 
 router = APIRouter(prefix="/exports", tags=["exports"])
 
@@ -26,6 +28,14 @@ def create_export(
     return batch
 
 
+@router.post("/database-backup", response_model=dict)
+def create_database_backup(settings: Settings = Depends(get_settings)):
+    try:
+        return backup_sqlite(settings)
+    except (FileNotFoundError, RuntimeError) as exc:
+        raise HTTPException(409, str(exc))
+
+
 @router.get("/{batch_id}/download")
 def download_export(
     batch_id: int,
@@ -37,7 +47,19 @@ def download_export(
         raise HTTPException(404, "Export not found")
     if not batch.zip_rel_path:
         raise HTTPException(404, "This export has no zip archive")
-    path = settings.export_dir / batch.zip_rel_path
-    if not path.exists():
-        raise HTTPException(404, "Zip file missing on disk")
-    return FileResponse(path, media_type="application/zip", filename=path.name)
+    filename = batch.zip_rel_path.rsplit("/", 1)[-1]
+    try:
+        stream = storage.iter_export(settings, batch.zip_rel_path)
+        first = next(stream)
+    except Exception as exc:
+        raise HTTPException(404, f"Zip file unavailable: {exc}")
+
+    def body():
+        yield first
+        yield from stream
+
+    return StreamingResponse(
+        body(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

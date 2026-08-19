@@ -15,13 +15,15 @@ def utcnow() -> datetime:
 # in the API layer so new styles/domains can be added without migrations).
 # ---------------------------------------------------------------------------
 STYLES = ["neutral", "friendly", "formal", "apologetic", "explanatory", "energetic"]
-DIALECTS = ["emirati", "msa", "mixed"]
+DIALECTS = ["emirati", "msa", "mixed", "english"]
+LANGUAGES = ["ar-AE", "en-US", "mixed"]
 DOMAINS = [
     "customer_support",
     "telecom",
     "billing",
     "technical_support",
     "sales",
+    "hr",
     "numbers_dates",
     "general",
     "other",
@@ -31,6 +33,18 @@ QC_STATUSES = ["passed", "warning", "failed"]
 HUMAN_STATUSES = ["pending", "accepted", "rejected"]
 ASR_STATUSES = ["not_run", "match", "minor_mismatch", "major_mismatch", "error"]
 ROLES = ["admin", "recorder"]
+
+
+class AppSetting(Base):
+    """Small database-backed settings that administrators edit in the UI."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
 
 
 class User(Base):
@@ -78,7 +92,12 @@ class Dataset(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     instructions: Mapped[str] = mapped_column(Text, default="")
     language: Mapped[str] = mapped_column(String(16), default="ar-AE")
+    # A dataset may intentionally contain Arabic, English and code-switched
+    # utterances. Every Script still carries its own exact language tag.
+    languages: Mapped[list] = mapped_column(JSON, default=lambda: ["ar-AE"])
     dialect: Mapped[str] = mapped_column(String(24), default="emirati")
+    # Dataset-specific additions layered on top of the global text policy.
+    text_policy: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="active")  # active | archived
     # Planning targets set by the data scientist (used for hour projections and
     # to steer GenAI sentence length; not hard limits).
@@ -187,6 +206,9 @@ class Recording(Base):
 
     human_status: Mapped[str] = mapped_column(String(12), default="pending", index=True)
     review_note: Mapped[str] = mapped_column(Text, default="")
+    # True when a human explicitly overrides a failed automatic QC result.
+    # The original qc_status/issues remain unchanged for auditability.
+    forced_save: Mapped[bool] = mapped_column(Boolean, default=False)
     # Transcript exported with this audio. Defaults to the script's training
     # text at accept time; reviewers may adjust it to match what was spoken.
     final_text: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -198,6 +220,19 @@ class Recording(Base):
     script: Mapped[Script] = relationship(back_populates="recordings")
     session: Mapped[RecordingSession] = relationship(back_populates="recordings")
     speaker: Mapped[Speaker] = relationship()
+
+
+class ScriptSkip(Base):
+    """Audit row for a script a recorder skipped / deleted from their queue."""
+
+    __tablename__ = "script_skips"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    speaker_id: Mapped[int] = mapped_column(ForeignKey("speakers.id"), index=True)
+    dataset_id: Mapped[int | None] = mapped_column(ForeignKey("datasets.id"), nullable=True, index=True)
+    script_id: Mapped[str] = mapped_column(String(64), default="")
+    display_text: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ExportBatch(Base):

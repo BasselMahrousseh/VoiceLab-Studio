@@ -107,11 +107,11 @@ frontend/src
 └── pages/
     ├── Login.tsx          Branded login screen
     ├── Recorder.tsx       Recorder-only view (read → record → save/restart)
-    ├── Datasets.tsx       Admin: dataset list, manual create, detail
+    ├── Datasets.tsx       Admin: dataset owner (policy, languages, scripts, people)
     ├── GenAIWizard.tsx    Admin: GenAI dataset builder (plan → generate → create)
     ├── Team.tsx           Admin: user management
     ├── Studio.tsx         Admin: full-featured recording console
-    ├── Scripts.tsx        Admin: script bank + LLM generate/import
+    ├── Scripts.tsx        Admin: cross-dataset script library / QA editor
     ├── Review.tsx         Admin: QC/ASR review queue
     ├── ExportPage.tsx     Admin: build & download exports
     └── Settings.tsx       Admin: services, sessions, policy
@@ -127,7 +127,7 @@ single auth context; server state is fetched on demand via `api.ts`.
 
 | Role | Sees | Purpose |
 | --- | --- | --- |
-| **admin** (data scientist) | Datasets, Team, Studio, Scripts, Review, Export, Settings | Plan datasets (incl. GenAI), manage recorders, review & export |
+| **admin** (data scientist) | Datasets, Team, Studio, Script library, Review, Export, Settings | Plan multilingual datasets (incl. GenAI), manage recorders, review & export |
 | **recorder** | A single simplified recording view | Read the next script aloud, save or restart |
 
 `App.tsx` renders the login screen when unauthenticated, the recorder view for

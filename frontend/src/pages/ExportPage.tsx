@@ -2,14 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import { get, mediaUrl, post } from "../api";
 import { formatDuration } from "../App";
 import { Chip, MultiSelect, Spinner } from "../components/widgets";
-import { AppStatus, ExportBatch } from "../types";
+import { AppStatus, Dataset, ExportBatch } from "../types";
 
 export default function ExportPage({ status }: { status: AppStatus | null }) {
   const [batches, setBatches] = useState<ExportBatch[]>([]);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [params, setParams] = useState({
     name: "",
+    dataset_id: 0,
     sample_rate: 24000,
     trim_silence: true,
     normalize: "none",
@@ -25,6 +27,17 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
     get<ExportBatch[]>("/api/exports").then(setBatches).catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
+  useEffect(() => {
+    get<Dataset[]>("/api/datasets")
+      .then((rows) => {
+        setDatasets(rows);
+        setParams((current) => ({
+          ...current,
+          dataset_id: current.dataset_id || rows.find((dataset) => dataset.accepted_count > 0)?.id || rows[0]?.id || 0,
+        }));
+      })
+      .catch((e) => setError(e.message));
+  }, []);
 
   useEffect(() => {
     if (status) setParams((p) => ({ ...p, sample_rate: status.export_sample_rate }));
@@ -62,6 +75,17 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
             <input className="input" placeholder="emirati_v1" value={params.name} onChange={(e) => setParams({ ...params, name: e.target.value })} />
           </label>
           <label>
+            Dataset
+            <select className="input" value={params.dataset_id} onChange={(e) => setParams({ ...params, dataset_id: Number(e.target.value) })}>
+              <option value={0}>Select a dataset</option>
+              {datasets.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.name} — {dataset.accepted_count} accepted
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
             Target sample rate
             <select className="input" value={params.sample_rate} onChange={(e) => setParams({ ...params, sample_rate: Number(e.target.value) })}>
               {[16000, 22050, 24000, 44100, 48000].map((r) => (
@@ -91,7 +115,7 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
           </label>
           <label className="check">
             <input type="checkbox" checked={params.dedupe_takes} onChange={(e) => setParams({ ...params, dedupe_takes: e.target.checked })} />
-            One take per script (latest accepted)
+            One take per script and speaker (latest accepted)
           </label>
           <label className="check">
             <input type="checkbox" checked={params.include_qc_warning} onChange={(e) => setParams({ ...params, include_qc_warning: e.target.checked })} />
@@ -112,11 +136,12 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
         </div>
         {error && <div className="banner error">{error}</div>}
         <div className="row gap" style={{ marginTop: 12 }}>
-          <button className="btn accent" onClick={run} disabled={busy}>
+          <button className="btn accent" onClick={run} disabled={busy || !params.dataset_id}>
             {busy ? <Spinner label="Exporting…" /> : "📦 Build export"}
           </button>
           <span className="muted small">
-            {status?.accepted_count ?? 0} accepted recordings · {formatDuration(status?.accepted_duration_sec ?? 0)}
+            {datasets.find((dataset) => dataset.id === params.dataset_id)?.accepted_count ?? 0} accepted recordings in the selected dataset ·{" "}
+            {formatDuration(datasets.find((dataset) => dataset.id === params.dataset_id)?.accepted_duration_sec ?? 0)}
           </span>
         </div>
       </div>
@@ -126,6 +151,7 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
         <thead>
           <tr>
             <th>Name</th>
+            <th>Dataset</th>
             <th>Created</th>
             <th>Clips</th>
             <th>Duration</th>
@@ -137,6 +163,9 @@ export default function ExportPage({ status }: { status: AppStatus | null }) {
           {batches.map((b) => (
             <tr key={b.id}>
               <td>{b.name}</td>
+              <td className="small">
+                {datasets.find((dataset) => dataset.id === Number(b.params?.dataset_id))?.name || "All / legacy"}
+              </td>
               <td className="muted small">{new Date(b.created_at).toLocaleString()}</td>
               <td>{b.file_count}</td>
               <td>{b.stats?.total_duration_hms ?? "—"}</td>

@@ -175,6 +175,25 @@ export class StudioRecorder {
 }
 
 export async function listInputDevices(): Promise<MediaDeviceInfo[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
   const devices = await navigator.mediaDevices.enumerateDevices();
-  return devices.filter((d) => d.kind === "audioinput");
+  return devices.filter((d) => d.kind === "audioinput" && d.deviceId);
+}
+
+/** Request mic permission, then enumerate inputs (labels appear after permission). */
+export async function requestInputDevices(deviceId?: string): Promise<MediaDeviceInfo[]> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return listInputDevices();
+  }
+  let stream: MediaStream | null = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: deviceId ? { deviceId: { exact: deviceId } } : true,
+    });
+  } catch {
+    // Permission denied or device unavailable — still try best-effort enumeration.
+  } finally {
+    stream?.getTracks().forEach((track) => track.stop());
+  }
+  return listInputDevices();
 }

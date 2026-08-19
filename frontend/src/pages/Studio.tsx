@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, upload } from "../api";
 import { formatDuration } from "../App";
-import { listInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
+import { listInputDevices, requestInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
 import LevelMeter from "../components/LevelMeter";
 import QcPanel from "../components/QcPanel";
 import Waveform from "../components/Waveform";
 import { Chip, Modal, Spinner } from "../components/widgets";
-import { AppStatus, Recording, Script, SessionInfo, Speaker } from "../types";
+import { AppStatus, Dataset, Recording, Script, SessionInfo, Speaker } from "../types";
 
 type Phase = "ready" | "recording" | "processing" | "review";
 
@@ -18,6 +18,8 @@ export default function Studio({
   onChanged: () => void;
 }) {
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined);
+  const [datasets, setDatasets] = useState<Dataset[]>([]);
+  const [datasetId, setDatasetId] = useState(Number(localStorage.getItem("vl_studio_dataset")) || 0);
   const [script, setScript] = useState<Script | null>(null);
   const [queueRemaining, setQueueRemaining] = useState(0);
   const [phase, setPhase] = useState<Phase>("ready");
@@ -46,22 +48,59 @@ export default function Studio({
     get<SessionInfo | null>("/api/sessions/active").then(setSession).catch(() => setSession(null));
   }, []);
   useEffect(loadSession, [loadSession]);
+  useEffect(() => {
+    get<Dataset[]>("/api/datasets")
+      .then((rows) => {
+        const eligible = rows.filter((dataset) => dataset.status === "active" && dataset.script_count > 0);
+        setDatasets(eligible);
+        setDatasetId((current) => {
+          if (eligible.some((dataset) => dataset.id === current)) return current;
+          return eligible[0]?.id ?? 0;
+        });
+      })
+      .catch((e) => setError(e.message));
+  }, []);
 
   const loadNext = useCallback(
     (excludeId?: number) => {
-      const q = excludeId ? `?exclude_id=${excludeId}` : "";
-      get<Script | null>(`/api/scripts/next${q}`).then(setScript).catch((e) => setError(e.message));
-      get<{ remaining: number }>("/api/scripts/queue-count")
+      if (!datasetId) {
+        setScript(null);
+        setQueueRemaining(0);
+        return;
+      }
+      const params = new URLSearchParams({ dataset_id: String(datasetId) });
+      if (excludeId) params.set("exclude_id", String(excludeId));
+      get<Script | null>(`/api/scripts/next?${params}`).then(setScript).catch((e) => setError(e.message));
+      get<{ remaining: number }>(`/api/scripts/queue-count?dataset_id=${datasetId}`)
         .then((r) => setQueueRemaining(r.remaining))
         .catch(() => undefined);
     },
-    []
+    [datasetId]
   );
   useEffect(() => {
     if (session) loadNext();
   }, [session, loadNext]);
 
   useEffect(() => () => recorder.current?.close(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshDevices = async () => {
+      try {
+        const devs = await requestInputDevices();
+        if (!cancelled) setDevices(devs);
+      } catch {
+        const devs = await listInputDevices();
+        if (!cancelled) setDevices(devs);
+      }
+    };
+    void refreshDevices();
+    navigator.mediaDevices?.addEventListener("devicechange", refreshDevices);
+    return () => {
+      cancelled = true;
+      navigator.mediaDevices?.removeEventListener("devicechange", refreshDevices);
+    };
+  }, []);
 
   // --- recording -----------------------------------------------------------
   const ensureRecorder = useCallback(async (): Promise<StudioRecorder> => {
@@ -127,11 +166,12 @@ export default function Studio({
     }
   }, [script, session, autoAsr, status, loadSession]);
 
-  const accept = useCallback(async () => {
+  const accept = useCallback(async (force = false) => {
     if (!rec) return;
     try {
       await post<Recording>(`/api/recordings/${rec.id}/accept`, {
         final_text: editText !== null ? editText : undefined,
+        force,
       });
       setPhase("ready");
       setTake(null);
@@ -173,7 +213,12 @@ export default function Studio({
         e.preventDefault();
         if (phaseRef.current === "ready") void startRecording();
         else if (phaseRef.current === "recording") void stopRecording();
-      } else if (e.key === "Enter" && phaseRef.current === "review" && rec) {
+      } else if (
+        e.key === "Enter" &&
+        phaseRef.current === "review" &&
+        rec &&
+        rec.qc_status !== "failed"
+      ) {
         e.preventDefault();
         void accept();
       } else if ((e.key === "r" || e.key === "R") && phaseRef.current === "review") {
@@ -223,6 +268,20 @@ export default function Studio({
           )}
         </div>
         <div className="row gap">
+          <select
+            className="input small-select"
+            value={datasetId}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setDatasetId(next);
+              localStorage.setItem("vl_studio_dataset", String(next));
+            }}
+          >
+            {!datasets.length && <option value={0}>No populated dataset</option>}
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>{dataset.name}</option>
+            ))}
+          </select>
           <span className="muted small">
             {session.accepted_count}/{session.recording_count} accepted · {queueRemaining} in queue
           </span>
@@ -247,7 +306,7 @@ export default function Studio({
       {!script ? (
         <div className="panel center-panel">
           <h2>🎉 Queue is empty</h2>
-          <p className="muted">All active scripts are recorded. Generate or import more in the Scripts page.</p>
+          <p className="muted">All active scripts are recorded. Add or generate more from the Datasets page.</p>
         </div>
       ) : (
         <>
@@ -255,6 +314,7 @@ export default function Studio({
             <div className="row spread">
               <div className="row gap">
                 <Chip>{script.script_id}</Chip>
+                <Chip tone="accent">{script.language}</Chip>
                 <Chip tone="accent">{script.style}</Chip>
                 <Chip>{script.domain}</Chip>
                 <Chip>{script.dialect}</Chip>
@@ -265,7 +325,7 @@ export default function Studio({
                 ⚑ Flag script
               </button>
             </div>
-            <div className="arabic script-display" dir="rtl">
+            <div className="arabic script-display" dir="auto">
               {script.display_text}
             </div>
             {script.training_text !== script.display_text && (
@@ -274,7 +334,7 @@ export default function Studio({
                   {showTraining ? "▾" : "▸"} exact reading (training text)
                 </button>
                 {showTraining && (
-                  <div className="arabic training-text" dir="rtl">
+                  <div className="arabic training-text" dir="auto">
                     {script.training_text}
                   </div>
                 )}
@@ -349,6 +409,11 @@ export default function Studio({
                 {verifying && <Spinner label="ASR verifying…" />}
               </div>
               <QcPanel rec={rec} />
+              {rec.forced_save && (
+                <div className="banner warn small">
+                  This take was saved with a human override despite failed automatic QC.
+                </div>
+              )}
               <div className="edit-block">
                 <button
                   className="link-btn"
@@ -359,7 +424,7 @@ export default function Studio({
                 {editText !== null && (
                   <textarea
                     className="input arabic edit-area"
-                    dir="rtl"
+                    dir="auto"
                     value={editText}
                     onChange={(e) => setEditText(e.target.value)}
                     rows={2}
@@ -367,10 +432,15 @@ export default function Studio({
                 )}
               </div>
               <div className="row gap action-row">
-                <button className="btn accept" onClick={accept} disabled={rec.qc_status === "failed"}
-                  title={rec.qc_status === "failed" ? "QC failed - re-record (or accept from Review page)" : ""}>
-                  ✓ Accept {editText !== null && "with edit"} <kbd>Enter</kbd>
-                </button>
+                {rec.qc_status === "failed" ? (
+                  <button className="btn danger" onClick={() => accept(true)}>
+                    ✓ Save anyway {editText !== null && "with edit"}
+                  </button>
+                ) : (
+                  <button className="btn accept" onClick={() => accept(false)}>
+                    ✓ Accept {editText !== null && "with edit"} <kbd>Enter</kbd>
+                  </button>
+                )}
                 <button className="btn" onClick={rerecord}>
                   ↺ Re-record <kbd>R</kbd>
                 </button>

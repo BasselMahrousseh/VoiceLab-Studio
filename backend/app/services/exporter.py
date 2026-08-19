@@ -26,7 +26,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from ..config import Settings
-from ..models import ExportBatch, Recording
+from ..models import Dataset, ExportBatch, Recording, Script
 from .audio_io import (
     load_wav,
     loudness_normalize,
@@ -35,7 +35,8 @@ from .audio_io import (
     write_wav_pcm16,
 )
 from .audio_qc import find_speech_bounds
-from .storage import abs_audio_path
+from . import storage
+from . import text_policy
 
 
 def _slug(name: str) -> str:
@@ -54,18 +55,24 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
     styles = params.get("styles") or []
     domains = params.get("domains") or []
     make_zip = bool(params.get("make_zip", True))
+    dataset_id = params.get("dataset_id")
+    dataset = db.get(Dataset, dataset_id) if dataset_id else None
 
     q = (
         db.query(Recording)
         .filter(Recording.human_status == "accepted")
         .order_by(Recording.id)
     )
+    if dataset_id:
+        q = q.join(Script, Recording.script_pk == Script.id).filter(
+            Script.dataset_id == dataset_id
+        )
     recordings = [r for r in q.all()]
     # Filter in Python (JSON columns + joined fields keep this simple; volumes
     # here are thousands of rows, not millions).
     out: list[Recording] = []
     for r in recordings:
-        if r.qc_status == "failed":
+        if r.qc_status == "failed" and not r.forced_save:
             continue
         if r.qc_status == "warning" and not include_qc_warning:
             continue
@@ -76,10 +83,15 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
         out.append(r)
 
     if dedupe_takes:
-        latest: dict[int, Recording] = {}
+        latest: dict[tuple[int, int], Recording] = {}
         for r in out:
-            latest[r.script_pk] = r  # ordered by id => keeps latest accepted
-        out = sorted(latest.values(), key=lambda r: r.script.script_id)
+            # Keep one accepted take per utterance *per voice*. Collapsing only
+            # by script would silently discard other assigned recorders.
+            latest[(r.script_pk, r.speaker_id)] = r
+        out = sorted(
+            latest.values(),
+            key=lambda r: (r.speaker.speaker_key, r.script.script_id),
+        )
     else:
         out = sorted(out, key=lambda r: (r.script.script_id, r.take_number))
 
@@ -94,7 +106,7 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
 
     for rec in out:
         try:
-            audio = load_wav(abs_audio_path(settings, rec.rel_path))
+            audio = load_wav(storage.read_master(settings, rec.rel_path))
             x = audio.mono()
             if trim_silence:
                 start, end = find_speech_bounds(x, audio.sample_rate)
@@ -133,6 +145,7 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
                     "session_id": rec.session_id,
                     "take_number": rec.take_number,
                     "text_edited": rec.text_edited,
+                    "forced_save": rec.forced_save,
                     "qc_status": rec.qc_status,
                     "asr_status": rec.asr_status,
                     "asr_cer": rec.asr_cer,
@@ -159,10 +172,14 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
         "total_duration_hms": _hms(total_dur),
         "by_style": dict(Counter(r["style"] for r in rows)),
         "by_domain": dict(Counter(r["domain"] for r in rows)),
+        "by_language": dict(Counter(r["language"] for r in rows)),
+        "by_speaker": dict(Counter(r["speaker_id"] for r in rows)),
         "by_dialect": dict(Counter(r["dialect"] for r in rows)),
         "by_qc_status": dict(Counter(r["qc_status"] for r in rows)),
         "avg_duration_sec": round(total_dur / len(rows), 2) if rows else 0,
         "errors": errors,
+        "dataset_id": dataset.id if dataset else None,
+        "dataset_name": dataset.name if dataset else "All datasets",
     }
     qc_report = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -175,6 +192,10 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
         json.dumps(qc_report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (root / "dataset_card.md").write_text(_dataset_card(qc_report), encoding="utf-8")
+    effective_policy = text_policy.get_policy(db)
+    if dataset and dataset.text_policy.strip():
+        effective_policy += "\n\n## Dataset-specific additions\n\n" + dataset.text_policy.strip()
+    (root / "text_policy.md").write_text(effective_policy, encoding="utf-8")
 
     zip_rel = ""
     if make_zip and rows:
@@ -184,6 +205,9 @@ def run_export(db: Session, params: dict, settings: Settings) -> ExportBatch:
                 if p.is_file():
                     zf.write(p, p.relative_to(root.parent))
         zip_rel = f"{batch_slug}/{batch_slug}.zip"
+
+    # The generated tree includes dataset/ and, when requested, the ZIP beside it.
+    storage.save_export_tree(settings, root.parent, batch_slug)
 
     batch = ExportBatch(
         name=name,
@@ -210,7 +234,7 @@ def _hms(seconds: float) -> str:
 
 def _dataset_card(report: dict) -> str:
     stats = report["stats"]
-    return f"""# Emirati Voice Dataset
+    return f"""# {stats['dataset_name']}
 
 - Generated: {report['generated_at']}
 - Dataset version: {report['dataset_version']} (VoiceLab Studio {report['app_version']})
@@ -220,6 +244,8 @@ def _dataset_card(report: dict) -> str:
 
 ## Composition
 
+- By language: {json.dumps(stats['by_language'], ensure_ascii=False)}
+- By speaker: {json.dumps(stats['by_speaker'], ensure_ascii=False)}
 - By style: {json.dumps(stats['by_style'], ensure_ascii=False)}
 - By domain: {json.dumps(stats['by_domain'], ensure_ascii=False)}
 - By dialect: {json.dumps(stats['by_dialect'], ensure_ascii=False)}
@@ -230,9 +256,9 @@ def _dataset_card(report: dict) -> str:
   transcript (exact spoken words, Emirati preserved); `display_text` is what
   the speaker saw; `msa_equivalent` is supplementary metadata only.
 - `qc_report.json` — export parameters and aggregate quality stats.
+- `text_policy.md` — effective global policy plus this dataset's additions.
 - Audio: mono PCM 16-bit WAV at {report['params'].get('sample_rate', 'target')} Hz.
 
-Transcripts follow the project text policy (see POLICY.md in the source repo):
-Emirati wording is never rewritten to MSA; numbers in `text` are written as
-spoken words.
+Transcripts follow the included `text_policy.md`. Every row carries its
+per-sentence `language`, `dialect`, style, domain and tags.
 """

@@ -1,4 +1,5 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useId } from "react";
+import { createPortal } from "react-dom";
 
 export function Chip({ children, tone = "" }: { children: ReactNode; tone?: string }) {
   return <span className={`chip ${tone}`}>{children}</span>;
@@ -32,18 +33,38 @@ export function Modal({
   children: ReactNode;
   wide?: boolean;
 }) {
-  return (
+  const titleId = useId();
+
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    document.body.classList.add("modal-open");
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.body.classList.remove("modal-open");
+    };
+  }, [onClose]);
+
+  return createPortal(
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`modal ${wide ? "wide" : ""}`}>
+      <div
+        className={`modal ${wide ? "wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+      >
         <div className="modal-head">
-          <h3>{title}</h3>
+          <h3 id={titleId}>{title}</h3>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
         <div className="modal-body">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
 
@@ -61,24 +82,31 @@ export function MultiSelect({
   value,
   onChange,
 }: {
-  options: string[];
+  options: Array<string | { value: string; label: string }>;
   value: string[];
   onChange: (v: string[]) => void;
 }) {
   return (
     <div className="multi-select">
-      {options.map((o) => (
-        <label key={o} className={value.includes(o) ? "on" : ""}>
-          <input
-            type="checkbox"
-            checked={value.includes(o)}
-            onChange={(e) =>
-              onChange(e.target.checked ? [...value, o] : value.filter((v) => v !== o))
-            }
-          />
-          {o}
-        </label>
-      ))}
+      {options.map((option) => {
+        const normalized = typeof option === "string" ? { value: option, label: option } : option;
+        return (
+          <label key={normalized.value} className={value.includes(normalized.value) ? "on" : ""}>
+            <input
+              type="checkbox"
+              checked={value.includes(normalized.value)}
+              onChange={(e) =>
+                onChange(
+                  e.target.checked
+                    ? [...value, normalized.value]
+                    : value.filter((v) => v !== normalized.value)
+                )
+              }
+            />
+            {normalized.label}
+          </label>
+        );
+      })}
     </div>
   );
 }

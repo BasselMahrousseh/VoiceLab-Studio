@@ -1,0 +1,126 @@
+# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
+# More GitHub Actions for Azure: https://github.com/Azure/actions
+# Oryx builds antenv from requirements.txt on App Service (SCM_DO_BUILD_DURING_DEPLOYMENT=true).
+
+name: Build and deploy Python app to Azure Web App - AI-UAT-COG-VoiceLab-APP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python version
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # Source-only zip. Oryx installs requirements.txt into antenv on App Service.
+      - name: Prepare deployment package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p package/frontend
+
+          cp -R backend package/backend
+          rm -rf package/backend/tests package/backend/data
+          find package/backend -type d -name '__pycache__' -prune -exec rm -rf {} +
+          find package/backend -type f -name '*.py[co]' -delete
+
+          cp -R frontend/dist package/frontend/dist
+          cp requirements.txt package/
+          sed 's/\r$//' startup.sh > package/startup.sh
+
+          cd package
+          zip -r ../release.zip . \
+            -x '*/__pycache__/*' \
+            -x '*.pyc' \
+            -x '*.pyo' \
+            -x '*/.git/*'
+
+      - name: Verify deployment artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          required=(
+            'backend/app/main.py'
+            'frontend/dist/index.html'
+            'startup.sh'
+            'requirements.txt'
+          )
+          listing="$(unzip -l release.zip)"
+          echo "$listing" | tail -n 5
+          for path in "${required[@]}"; do
+            if ! echo "$listing" | grep -F "$path" >/dev/null; then
+              echo "::error::Missing required path in release.zip: $path"
+              exit 1
+            fi
+            echo "OK: $path"
+          done
+          if echo "$listing" | grep -E '(^|/).python_packages(/|$)|(^|/)antenv(/|$)' >/dev/null; then
+            echo "::error::Package must not contain .python_packages or antenv (Oryx builds antenv)"
+            exit 1
+          fi
+
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-app
+          path: release.zip
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: python-app
+
+      - name: Mark deploy start time
+        id: deploy-timing
+        shell: bash
+        run: |
+          echo "start_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+          echo "Deploy started at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      - name: Deploy to Azure Web App
+        uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
+        with:
+          app-name: 'AI-UAT-COG-VoiceLab-APP'
+          slot-name: 'Production'
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_E9E304DF9803495E8F0D5B66C66195F0 }}
+          package: release.zip
+
+      - name: Log deployment duration
+        if: always()
+        shell: bash
+        run: |
+          START_EPOCH="${{ steps.deploy-timing.outputs.start_epoch }}"
+          if [[ -n "$START_EPOCH" ]]; then
+            ELAPSED=$(( $(date +%s) - START_EPOCH ))
+            echo "Deploy phase elapsed: ${ELAPSED}s"
+          fi
+          echo "App URL: ${{ steps.deploy-to-webapp.outputs.webapp-url }}"
+          echo "Ensure App Service settings: startup='bash startup.sh', SCM_DO_BUILD_DURING_DEPLOYMENT=true, and WEBSITE_RUN_FROM_PACKAGE is unset."

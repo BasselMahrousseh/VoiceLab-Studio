@@ -1,6 +1,6 @@
-/** e& brand mark — the official logo shipped in `frontend/public/logo.png`. */
+/** Full e& Lahja Studio brand lockup. */
 export default function Logo({
-  height = 30,
+  height = 54,
   className = "",
 }: {
   height?: number;
@@ -8,11 +8,11 @@ export default function Logo({
 }) {
   return (
     <img
-      src="/logo.png"
+      src="/lahja-studio-logo.png"
       height={height}
-      alt="e&"
+      alt="e& Lahja Studio"
       className={className}
-      style={{ height, width: "auto", display: "block" }}
+      style={{ height, width: "auto", maxWidth: "100%", objectFit: "contain", display: "block" }}
     />
   );
 }
