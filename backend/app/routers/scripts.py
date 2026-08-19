@@ -1,4 +1,5 @@
 import json
+import secrets
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,6 +29,8 @@ router = APIRouter(prefix="/scripts", tags=["scripts"])
 
 def _generation_params(params: GenerateParams, db: Session) -> dict:
     data = params.model_dump()
+    if data.get("variation_seed") is None:
+        data["variation_seed"] = secrets.randbelow(2_147_483_648)
     additions = data.get("policy_text", "").strip()
     policy = text_policy.get_policy(db)
     if additions:
@@ -495,6 +498,8 @@ def generate_stream(
                     "requested": requested,
                     "batches": len(batch_counts),
                     "speaker_gender": speaker_gender,
+                    "temperature": base_params.get("temperature"),
+                    "variation_seed": base_params.get("variation_seed"),
                     "scenario_plan": full_plan,
                     "plan_summary": scenario_planner.summarize_plan(
                         [

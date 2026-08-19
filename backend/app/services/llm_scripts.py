@@ -66,6 +66,12 @@ questions, statements, confirmations, greetings, complaints, acknowledgements,
 agent responses, customer responses, polite exchanges, and short troubleshooting
 guidance. Vary who is speaking and what they are doing.
 
+Genre variation:
+Follow the genre assigned to each scenario. Rotate transactional,
+troubleshooting, informational, complaint, advisory, and social/everyday
+utterances when those genres are requested. Genre must change the purpose and
+sentence structure, not merely add a different tag to the same wording.
+
 Lexical & structural diversity:
 Vary openings, verbs, and sentence shapes. No repeated templates or near-paraphrases
 of the same line. In larger batches (about 30–100), spread topics and intents;
@@ -176,7 +182,9 @@ def ensure_scenario_plan(params: dict) -> list[dict]:
             languages=list(params.get("languages") or ["ar-AE"]),
             dialect=str(params.get("dialect") or "emirati"),
             styles=list(params.get("styles") or ["neutral"]),
+            genres=list(params.get("genres") or scenario_planner.DEFAULT_GENRES),
             speaker_gender=speaker_gender,
+            variation_seed=params.get("variation_seed"),
         )
     )
     params["scenario_plan"] = plan
@@ -202,6 +210,7 @@ def format_scenario_assignment(slot: dict, *, item_number: int) -> str:
             f"Language: {slot.get('language', 'ar-AE')}",
             f"Dialect: {slot.get('dialect', 'emirati')}",
             f"Style: {slot.get('style', 'neutral')}",
+            f"Genre: {slot.get('genre', 'transactional')}",
         ]
     )
 
@@ -212,15 +221,17 @@ Scenario assignment rules (mandatory):
 - Do not swap scenarios between slots.
 - Do not invent a different scenario.
 - The utterance must clearly express the assigned intent.
-- Keep the assigned domain, language, dialect, gender, and style.
+- Keep the assigned domain, language, dialect, gender, style, and genre.
 - Do not mention the scenario id/name in the generated text.
 - Do not generate multiple utterances for one scenario.
-- Tag each item with scenario:<scenario_id> exactly matching the assignment."""
+- Tag each item with scenario:<scenario_id> exactly matching the assignment.
+- Tag each item with genre:<genre> exactly matching the assignment."""
 
 
 def build_user_prompt(params: dict, settings: Settings) -> str:
     count = int(params.get("count", 20))
     styles = params.get("styles") or ["neutral"]
+    genres = params.get("genres") or scenario_planner.DEFAULT_GENRES
     domains = params.get("domains") or [
         "customer_support", "telecom", "billing", "technical_support", "sales"
     ]
@@ -243,6 +254,7 @@ def build_user_prompt(params: dict, settings: Settings) -> str:
         f"Generate {count} utterances using the exact scenario assignments below.",
         f"Batch distribution: {telecom_count} telecom/business + {general_count} general.",
         f"Styles (rotate as assigned): {', '.join(styles)}",
+        f"Genres (rotate as assigned): {', '.join(genres)}",
         f"Languages (as assigned per item): {', '.join(languages)}",
         f"Default dialect: {dialect}"
         + (" (natural Emirati/MSA mix when language=mixed)" if dialect == "mixed" else ""),
@@ -380,11 +392,21 @@ def _max_output_tokens(count: int) -> int:
 
 def _generate_via_responses(client, settings: Settings, messages: list[dict], count: int) -> str:
     """Azure/OpenAI Responses API (gpt-5.x and other newer models)."""
-    resp = client.responses.create(
-        model=settings.llm_deployment,
-        input=messages,
-        max_output_tokens=_max_output_tokens(count),
-    )
+    kwargs = {
+        "model": settings.llm_deployment,
+        "input": messages,
+        "max_output_tokens": _max_output_tokens(count),
+    }
+    try:
+        resp = client.responses.create(
+            **kwargs,
+            temperature=float(getattr(settings, "llm_temperature", 1.3)),
+        )
+    except Exception:
+        # Some reasoning deployments only accept their default sampling
+        # settings. Keep those models working while using the requested higher
+        # temperature everywhere it is supported.
+        resp = client.responses.create(**kwargs)
     return getattr(resp, "output_text", "") or ""
 
 
@@ -392,7 +414,10 @@ def _generate_via_chat(client, settings: Settings, messages: list[dict]) -> str:
     """Classic Chat Completions API. Degrade gracefully on unsupported params."""
     kwargs: dict = {"model": settings.llm_deployment, "messages": messages}
     for attempt in (
-        {"temperature": 1.0, "response_format": {"type": "json_object"}},
+        {
+            "temperature": float(getattr(settings, "llm_temperature", 1.3)),
+            "response_format": {"type": "json_object"},
+        },
         {"response_format": {"type": "json_object"}},
         {},
     ):
@@ -425,6 +450,9 @@ def generate_scripts(params: dict, settings: Settings) -> list[dict]:
         {"role": "user", "content": build_user_prompt(params, settings)},
     ]
     count = int(params.get("count", 20))
+    settings = settings.model_copy(
+        update={"llm_temperature": float(params.get("temperature", settings.llm_temperature))}
+    )
     style = getattr(settings, "llm_api_style", "auto")
 
     if style == "chat":
@@ -456,6 +484,7 @@ _RETRYABLE_ERROR_MARKERS = (
     "style mismatch",
     "language mismatch",
     "dialect mismatch",
+    "genre mismatch",
 )
 
 
@@ -488,8 +517,10 @@ def build_retry_user_prompt(
         "",
         "Generate a new utterance that clearly expresses this exact scenario and intent.",
         "Do not change the scenario, domain, language, dialect, gender, or style.",
+        "Keep the assigned genre and vary the wording and sentence structure.",
         "Do not mention the scenario id/name in the generated text.",
         "Tag the item with scenario:<scenario_id> exactly matching the assignment.",
+        "Tag the item with genre:<genre> exactly matching the assignment.",
         "Return JSON only: {\"items\": [{...}]} with exactly one item.",
     ]
     speaker_gender = emirati.normalize_speaker_gender(
@@ -556,7 +587,10 @@ def regenerate_single_item(
             "content": build_retry_user_prompt(slot, params, settings, errors),
         },
     ]
-    content = _call_llm_messages(messages, settings=settings, count=1)
+    sampling_settings = settings.model_copy(
+        update={"llm_temperature": float(params.get("temperature", settings.llm_temperature))}
+    )
+    content = _call_llm_messages(messages, settings=sampling_settings, count=1)
     data = _extract_json(content)
     items = data.get("items", data if isinstance(data, list) else [])
     if not isinstance(items, list) or not items:
@@ -824,6 +858,22 @@ def validate_item(
     expected = (expected_scenario or "").strip() or None
     if expected_slot:
         expected = expected_slot.get("scenario") or expected
+        expected_genre = (expected_slot.get("genre") or "").strip().lower()
+        if expected_genre:
+            genre_tags = [
+                str(tag).split(":", 1)[1].strip().lower()
+                for tag in tags
+                if str(tag).startswith("genre:")
+            ]
+            if not genre_tags:
+                # The plan is authoritative metadata. Add its genre when older
+                # model deployments omit the tag, so saved records remain
+                # filterable without rejecting otherwise valid text.
+                tags = [*tags, f"genre:{expected_genre}"]
+            elif expected_genre not in genre_tags:
+                errors.append(
+                    f"genre mismatch: expected '{expected_genre}', got '{genre_tags[0]}'"
+                )
 
     if batch_scenario_ids is not None and tagged_scenario:
         scenario_ok = not expected or tagged_scenario == expected
@@ -875,6 +925,7 @@ def validate_item(
             "style": style,
             "domain": domain,
             "dialect": dialect,
+            "genre": (expected_slot or {}).get("genre") or "",
             "tags": tags,
             "note": item.get("note") or "",
             "length_bucket": tn.length_bucket(training),

@@ -34,6 +34,15 @@ const SPEAKER_GENDER_OPTIONS = [
   },
 ] as const;
 
+const GENRE_OPTIONS = [
+  { value: "transactional", label: "Transactional" },
+  { value: "troubleshooting", label: "Troubleshooting" },
+  { value: "informational", label: "Informational" },
+  { value: "complaint", label: "Complaints" },
+  { value: "advisory", label: "Advisory" },
+  { value: "social", label: "Social / everyday" },
+];
+
 function speakerGenderLabel(value: string): string {
   return SPEAKER_GENDER_OPTIONS.find((option) => option.value === value)?.label ?? value;
 }
@@ -87,11 +96,13 @@ export default function GenAIWizard({
     target_sample_count: dataset?.target_sample_count || 200,
     avg_duration_sec: dataset?.target_avg_duration_sec || 6,
     styles: ["neutral"] as string[],
+    genres: GENRE_OPTIONS.map((option) => option.value),
     domains: ["customer_support", "telecom", "billing", "technical_support", "sales", "hr"] as string[],
     topics: "",
     brand_terms: "e&, du, eLife, 5G",
     generate_count: 30,
     speaker_gender: "any" as "any" | "male" | "female",
+    temperature: 1.3,
   });
   const [candidates, setCandidates] = useState<GenerateCandidate[] | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
@@ -131,6 +142,7 @@ export default function GenAIWizard({
     plan.avg_duration_sec > 0 &&
     plan.generate_count > 0 &&
     plan.styles.length > 0 &&
+    plan.genres.length > 0 &&
     plan.languages.length > 0;
 
   const set = (patch: Partial<typeof plan>) => setPlan((p) => ({ ...p, ...patch }));
@@ -164,6 +176,7 @@ export default function GenAIWizard({
         {
           count: plan.generate_count,
           styles: plan.styles,
+          genres: plan.genres,
           domains: plan.domains,
           languages: plan.languages,
           dialect: plan.dialect,
@@ -173,6 +186,7 @@ export default function GenAIWizard({
           avg_duration_sec: plan.avg_duration_sec,
           batch_name: `${plan.name} · AI batch`,
           speaker_gender: plan.speaker_gender,
+          temperature: plan.temperature,
         },
         (event) => {
           if (event.model) setModel(event.model);
@@ -425,6 +439,32 @@ export default function GenAIWizard({
                   <span className="muted small">Neutral is the only style enabled for now.</span>
                 </label>
                 <label className="span2">
+                  Genres
+                  <MultiSelect
+                    options={GENRE_OPTIONS}
+                    value={plan.genres}
+                    onChange={(v) => set({ genres: v.length ? v : ["transactional"] })}
+                  />
+                  <span className="muted small">
+                    Selected genres are rotated across scenarios to vary intent, structure, and delivery.
+                  </span>
+                </label>
+                <label>
+                  Creativity / temperature
+                  <input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.1}
+                    className="input"
+                    value={plan.temperature}
+                    onChange={(e) => set({
+                      temperature: Math.min(2, Math.max(0, Number(e.target.value) || 0)),
+                    })}
+                  />
+                  <span className="muted small">Default 1.3 for more varied wording; maximum 2.0.</span>
+                </label>
+                <label className="span2">
                   Telecom domains <span className="muted small">(75% of sentences spread across these)</span>
                   <MultiSelect
                     options={[
@@ -522,6 +562,10 @@ export default function GenAIWizard({
             Dialect: <b>{plan.dialect}</b>
             {" · "}
             Speaker gender: <b>{speakerGenderLabel(plan.speaker_gender)}</b>
+            {" · "}
+            Temperature: <b>{plan.temperature.toFixed(1)}</b>
+            {" · "}
+            Genres: <b>{plan.genres.length}</b>
           </div>
           <div className="row spread">
             <span className="muted small">
@@ -568,6 +612,7 @@ export default function GenAIWizard({
                       <Chip tone="accent">{languageLabel(c.computed.language)}</Chip>
                       <Chip>{c.computed.dialect}</Chip>
                       <Chip tone="accent">{c.computed.style}</Chip>
+                      {c.computed.genre && <Chip>{c.computed.genre}</Chip>}
                       <Chip>{c.computed.domain}</Chip>
                       <Chip>{c.computed.length_bucket}</Chip>
                       {c.errors.map((e2, n) => (

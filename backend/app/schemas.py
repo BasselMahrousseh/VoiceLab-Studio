@@ -222,6 +222,16 @@ class ScriptPatch(BaseModel):
 class GenerateParams(BaseModel):
     count: int = Field(default=20, ge=1, le=100)
     styles: list[str] = Field(default_factory=lambda: ["neutral"])
+    genres: list[str] = Field(
+        default_factory=lambda: [
+            "transactional",
+            "troubleshooting",
+            "informational",
+            "complaint",
+            "advisory",
+            "social",
+        ]
+    )
     domains: list[str] = Field(default_factory=lambda: ["customer_support"])
     languages: list[str] = Field(default_factory=lambda: ["ar-AE"])
     dialect: str = "emirati"
@@ -237,6 +247,11 @@ class GenerateParams(BaseModel):
     speaker_gender: Literal["any", "male", "female"] = "any"
     # When true (default), reserve ~25% of the batch for non-telecom general talk.
     include_general: bool = True
+    # Higher values increase lexical and structural variation. The LLM client
+    # retries without this parameter for model deployments that do not support it.
+    temperature: float = Field(default=1.3, ge=0.0, le=2.0)
+    # Optional reproducibility control. Normal requests receive a fresh seed.
+    variation_seed: int | None = Field(default=None, ge=0, le=2_147_483_647)
 
     @field_validator("speaker_gender", mode="before")
     @classmethod

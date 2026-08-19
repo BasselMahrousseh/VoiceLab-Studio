@@ -177,6 +177,7 @@ export interface GenerateCandidate {
     style: string;
     domain: string;
     dialect: string;
+    genre: string;
     tags: string[];
     note: string;
     length_bucket: string;

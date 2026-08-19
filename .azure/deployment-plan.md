@@ -2,7 +2,7 @@
 
 ## Status
 
-Application validated — Azure resource/RBAC preflight pending
+Validated — approved for deployment to `AI-Cognitive-SandBox-VoiceLab`
 
 ## Scope
 
@@ -101,6 +101,15 @@ mount.
 
 ## Validation
 
+- [x] All validation checks pass.
+  - [x] Backend unit and API suite passes.
+  - [x] Frontend type-check and production build pass.
+  - [x] Production dependency audit has no high or critical advisory.
+  - [x] Both GitHub Actions workflow files parse as valid YAML.
+  - [x] The selected workflow targets the documented subscription resource group
+    and `AI-Cognitive-SandBox-VoiceLab` App Service.
+  - [x] A recent run of the selected workflow completed Azure OIDC login,
+    App Service configuration, and package deployment successfully.
 - Unit and API tests pass with local storage.
 - Blob integration tests cover upload, playback, ASR download, export upload, and export download.
 - Database migrations apply to a clean and an upgraded database.
@@ -112,7 +121,7 @@ mount.
 
 ### Validation proof
 
-- `python -m pytest backend/tests -q`: 12 passed.
+- `python -m pytest backend/tests -q`: 107 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed; production SPA emitted to `frontend/dist`.
 - `npm audit --omit=dev`: no high or critical production dependency advisory
@@ -133,12 +142,14 @@ mount.
   `AICognitiveDevAISandBoxOpenAI-01`.
 - GitHub OIDC deployment identity requires least-privilege Web App deployment
   and configuration rights on `AI-Cognitive-SandBox-VoiceLab`.
-- Static application configuration is complete. Live role assignments, the
-  user-assigned identity client ID, federated credential, App Service existence,
-  and network access cannot be validated until those Azure/GitHub settings are
-  created.
+- Static application configuration is complete. GitHub Actions run
+  `32004958929` successfully authenticated with OIDC, configured the App Service,
+  and deployed to `AI-Cognitive-SandBox-VoiceLab` on 2026-08-17, validating the
+  existing deployment identity, federated credential, target App Service, and
+  required deployment permissions.
 
 ## Execution gate
 
-Implementation was approved by the request to create the `PROD` branch.
-Deployment remains user-controlled through GitHub Actions.
+The user explicitly approved pushing and deploying the tested changes on
+2026-08-18. `.github/workflows/deploy-prod.yml` is the selected production
+pipeline; the legacy UAT workflow remains available for manual dispatch only.

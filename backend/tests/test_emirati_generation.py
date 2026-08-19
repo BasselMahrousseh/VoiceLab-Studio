@@ -5,6 +5,7 @@ These tests mock the LLM and exercise deterministic planner/validator code only.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 
@@ -355,6 +356,29 @@ def test_plan_uses_unique_scenarios_for_batch_20():
     assert scenario_planner.validate_plan(plan) == []
 
 
+def test_plan_variation_seed_is_reproducible_and_changes_order():
+    first = scenario_planner.plan_generation_batch(20, variation_seed=101)
+    repeated = scenario_planner.plan_generation_batch(20, variation_seed=101)
+    different = scenario_planner.plan_generation_batch(20, variation_seed=202)
+
+    first_signature = [(slot.scenario, slot.genre) for slot in first]
+    assert first_signature == [(slot.scenario, slot.genre) for slot in repeated]
+    assert first_signature != [(slot.scenario, slot.genre) for slot in different]
+
+
+def test_plan_rotates_selected_genres():
+    genres = ["transactional", "troubleshooting", "social"]
+    plan = scenario_planner.plan_generation_batch(
+        12,
+        genres=genres,
+        variation_seed=42,
+    )
+    assert {slot.genre for slot in plan} == set(genres)
+    assert all(f"Genre: {slot.genre}" in llm_scripts.format_scenario_assignment(
+        slot.to_dict(), item_number=slot.index + 1
+    ) for slot in plan)
+
+
 def test_plan_multiple_scenarios_per_domain_for_large_batch():
     plan = scenario_planner.plan_generation_batch(30)
     summary = scenario_planner.summarize_plan(plan)
@@ -476,6 +500,7 @@ def test_plan_slot_has_all_required_fields():
         "language",
         "dialect",
         "style",
+        "genre",
     }
     for slot in plan:
         data = slot.to_dict()
@@ -586,6 +611,74 @@ def test_generate_params_speaker_gender_schema():
     assert GenerateParams(speaker_gender="unspecified").speaker_gender == "any"
     with pytest.raises(ValidationError):
         GenerateParams(speaker_gender="other")
+
+
+def test_generate_params_temperature_and_genres_schema():
+    from pydantic import ValidationError
+
+    from app.schemas import GenerateParams
+
+    params = GenerateParams()
+    assert params.temperature == 1.3
+    assert len(params.genres) >= 3
+    assert GenerateParams(temperature=1.8).temperature == 1.8
+    with pytest.raises(ValidationError):
+        GenerateParams(temperature=2.1)
+    with pytest.raises(ValidationError):
+        GenerateParams(temperature=-0.1)
+
+
+def test_responses_api_receives_configured_temperature():
+    from app.config import Settings
+
+    calls: list[dict] = []
+
+    class FakeResponses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(output_text='{"items": []}')
+
+    client = SimpleNamespace(responses=FakeResponses())
+    settings = Settings().model_copy(
+        update={"llm_deployment": "test-model", "llm_temperature": 1.7}
+    )
+    result = llm_scripts._generate_via_responses(
+        client,
+        settings,
+        [{"role": "user", "content": "generate"}],
+        2,
+    )
+
+    assert result == '{"items": []}'
+    assert calls[0]["temperature"] == 1.7
+
+
+def test_generate_scripts_applies_request_temperature(monkeypatch):
+    from app.config import Settings
+
+    temperatures: list[float] = []
+
+    def fake_chat(client, settings, messages):
+        temperatures.append(settings.llm_temperature)
+        return '{"items": []}'
+
+    monkeypatch.setattr(llm_scripts, "_client", lambda settings, api_style="chat": object())
+    monkeypatch.setattr(llm_scripts, "_generate_via_chat", fake_chat)
+
+    settings = Settings().model_copy(update={"llm_api_style": "chat"})
+    llm_scripts.generate_scripts(
+        {
+            "count": 1,
+            "temperature": 1.8,
+            "domains": ["general"],
+            "styles": ["neutral"],
+            "languages": ["en-US"],
+            "dialect": "english",
+        },
+        settings,
+    )
+
+    assert temperatures == [1.8]
 
 
 def test_generate_scripts_preserves_speaker_gender_on_retry(monkeypatch):

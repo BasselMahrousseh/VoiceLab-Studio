@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     # Newer Azure models (gpt-5.x) use the Responses API; classic deployments use
     # Chat Completions. "auto" tries Responses first and falls back.
     llm_api_style: str = "auto"  # auto | responses | chat
+    # Creative sampling default for script generation. Individual generation
+    # requests may override this in the 0.0-2.0 range.
+    llm_temperature: float = 1.3
     # Rough spoken words-per-second, used to turn a target average clip duration
     # into a target sentence length for generation and hour projections.
     llm_words_per_second: float = 2.3

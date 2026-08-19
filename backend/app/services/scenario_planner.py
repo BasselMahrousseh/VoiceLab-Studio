@@ -7,8 +7,19 @@ Domain spread alone is not treated as sufficient diversity.
 """
 from __future__ import annotations
 
+import random
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
+
+
+DEFAULT_GENRES = [
+    "transactional",
+    "troubleshooting",
+    "informational",
+    "complaint",
+    "advisory",
+    "social",
+]
 
 # Core telecom / customer-care scenarios (domain tagged for validation).
 TELECOM_SCENARIOS: list[dict[str, str]] = [
@@ -108,6 +119,7 @@ class ScenarioSlot:
     language: str  # ar-AE | en-US | mixed
     dialect: str  # emirati | msa | english | mixed
     style: str
+    genre: str
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -147,6 +159,7 @@ def slot_from_dict(data: dict) -> ScenarioSlot:
         language=str(data.get("language", "ar-AE")),
         dialect=str(data.get("dialect", "emirati")),
         style=str(data.get("style", "neutral")),
+        genre=str(data.get("genre", "transactional")),
     )
 
 
@@ -213,6 +226,7 @@ def _allocate_unique_scenarios(
     count: int,
     *,
     preferred_domains: list[str] | None = None,
+    rng: random.Random | None = None,
 ) -> list[dict[str, str]]:
     """Pick `count` scenarios: unique first, round-robin across domains.
 
@@ -227,6 +241,10 @@ def _allocate_unique_scenarios(
         by_domain[entry["domain"]].append(entry)
 
     domain_order = _domain_order(pool, preferred_domains)
+    if rng is not None:
+        rng.shuffle(domain_order)
+        for entries in by_domain.values():
+            rng.shuffle(entries)
     max_depth = max(len(by_domain[d]) for d in domain_order)
 
     # Round 0..max_depth: one scenario per domain per round → max diversity.
@@ -274,6 +292,7 @@ def _slot_from_entry(
     language: str,
     dialect: str,
     style: str,
+    genre: str,
     speaker_gender: str,
 ) -> ScenarioSlot:
     domain = entry["domain"]
@@ -289,6 +308,7 @@ def _slot_from_entry(
         language=language,
         dialect=dialect,
         style=style,
+        genre=genre,
     )
 
 
@@ -301,9 +321,15 @@ def plan_generation_batch(
     languages: list[str] | None = None,
     dialect: str = "emirati",
     styles: list[str] | None = None,
+    genres: list[str] | None = None,
     speaker_gender: str = "any",
+    variation_seed: int | None = None,
 ) -> list[ScenarioSlot]:
-    """Build a batch plan with unique scenarios and 75/25 business/general split."""
+    """Build a varied batch plan with a 75/25 business/general split.
+
+    ``variation_seed`` changes scenario and genre ordering while preserving the
+    requested distribution. Supplying the same seed reproduces the same plan.
+    """
     count = max(0, int(count))
     if count == 0:
         return []
@@ -324,30 +350,39 @@ def plan_generation_batch(
 
     lang_list = [l for l in (languages or ["ar-AE"]) if l] or ["ar-AE"]
     style_list = [s for s in (styles or ["neutral"]) if s] or ["neutral"]
+    genre_list = [g for g in (genres or DEFAULT_GENRES) if g] or list(DEFAULT_GENRES)
+    rng = random.Random(variation_seed) if variation_seed is not None else None
+    if rng is not None:
+        rng.shuffle(genre_list)
     batch_dialect = (dialect or "emirati").strip().lower()
     batch_gender = (speaker_gender or "any").strip().lower()
 
-    def _slot_meta(slot_index: int) -> tuple[str, str, str]:
+    def _slot_meta(slot_index: int) -> tuple[str, str, str, str]:
         language = lang_list[slot_index % len(lang_list)]
         style = style_list[slot_index % len(style_list)]
-        return language, _slot_dialect(language, batch_dialect), style
+        genre = genre_list[slot_index % len(genre_list)]
+        return language, _slot_dialect(language, batch_dialect), style, genre
 
     telecom_pool = _filter_telecom_scenarios(domains)
     core_entries = _allocate_unique_scenarios(
         telecom_pool,
         core_n,
         preferred_domains=[d for d in domain_rotation if d != "hr"],
+        rng=rng,
     )
-    hr_entries = _allocate_unique_scenarios(HR_SCENARIOS, hr_n, preferred_domains=["hr"])
+    hr_entries = _allocate_unique_scenarios(
+        HR_SCENARIOS, hr_n, preferred_domains=["hr"], rng=rng
+    )
     general_entries = _allocate_unique_scenarios(
         GENERAL_SCENARIOS,
         general_n,
         preferred_domains=["general"],
+        rng=rng,
     )
 
     core_slots: list[ScenarioSlot] = []
     for i, e in enumerate(core_entries):
-        lang, dia, sty = _slot_meta(len(core_slots))
+        lang, dia, sty, genre = _slot_meta(len(core_slots))
         core_slots.append(
             _slot_from_entry(
                 e,
@@ -355,12 +390,13 @@ def plan_generation_batch(
                 language=lang,
                 dialect=dia,
                 style=sty,
+                genre=genre,
                 speaker_gender=batch_gender,
             )
         )
     hr_slots: list[ScenarioSlot] = []
     for e in hr_entries:
-        lang, dia, sty = _slot_meta(len(core_slots) + len(hr_slots))
+        lang, dia, sty, genre = _slot_meta(len(core_slots) + len(hr_slots))
         hr_slots.append(
             _slot_from_entry(
                 e,
@@ -368,6 +404,7 @@ def plan_generation_batch(
                 language=lang,
                 dialect=dia,
                 style=sty,
+                genre=genre,
                 speaker_gender=batch_gender,
             )
         )
@@ -379,7 +416,7 @@ def plan_generation_batch(
     general_slots: list[ScenarioSlot] = []
     base_idx = len(telecom_merged)
     for i, e in enumerate(general_entries):
-        lang, dia, sty = _slot_meta(base_idx + i)
+        lang, dia, sty, genre = _slot_meta(base_idx + i)
         general_slots.append(
             _slot_from_entry(
                 e,
@@ -387,6 +424,7 @@ def plan_generation_batch(
                 language=lang,
                 dialect=dia,
                 style=sty,
+                genre=genre,
                 speaker_gender=batch_gender,
             )
         )
@@ -415,6 +453,7 @@ def plan_generation_batch(
             language=slot.language,
             dialect=slot.dialect,
             style=slot.style,
+            genre=slot.genre,
         )
         for i, slot in enumerate(final)
     ]
