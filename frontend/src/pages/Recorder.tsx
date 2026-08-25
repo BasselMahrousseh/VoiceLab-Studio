@@ -1,7 +1,13 @@
 import { ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { get, patch as apiPatch, post, upload } from "../api";
 import { useAuth } from "../auth";
-import { listInputDevices, requestInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
+import {
+  KEYBOARD_RECORDING_START_DELAY_MS,
+  listInputDevices,
+  requestInputDevices,
+  StudioRecorder,
+  TakeResult,
+} from "../audio/recorder";
 import Logo from "../components/Logo";
 import LevelMeter from "../components/LevelMeter";
 import Waveform from "../components/Waveform";
@@ -158,6 +164,7 @@ export default function Recorder() {
 
   const recorder = useRef<StudioRecorder | null>(null);
   const timerRef = useRef<number>(0);
+  const keyboardStartTimerRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("ready");
   const sessionStartedAtRef = useRef<number>(Date.now());
   phaseRef.current = phase;
@@ -386,6 +393,15 @@ export default function Recorder() {
     }
   }, [ensureRecorder, resetTake, stopRecording]);
 
+  useEffect(
+    () => () => {
+      if (keyboardStartTimerRef.current !== null) {
+        window.clearTimeout(keyboardStartTimerRef.current);
+      }
+    },
+    []
+  );
+
   const save = useCallback(
     async (force = false) => {
       if (!rec) return;
@@ -513,8 +529,15 @@ export default function Recorder() {
         }
       } else if (e.code === "Space") {
         e.preventDefault();
-        if (phaseRef.current === "ready") void startRecording();
-        else if (phaseRef.current === "recording") void stopRecording();
+        if (phaseRef.current === "ready") {
+          if (e.repeat || keyboardStartTimerRef.current !== null) return;
+          keyboardStartTimerRef.current = window.setTimeout(() => {
+            keyboardStartTimerRef.current = null;
+            if (phaseRef.current === "ready") void startRecording();
+          }, KEYBOARD_RECORDING_START_DELAY_MS);
+        } else if (phaseRef.current === "recording") {
+          void stopRecording();
+        }
       } else if (e.key === "Enter" && phaseRef.current === "review" && rec?.qc_status !== "failed") {
         e.preventDefault();
         void save();

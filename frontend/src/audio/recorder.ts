@@ -10,6 +10,10 @@
  */
 import { encodeWavFloat32 } from "./wav";
 
+// Give the mechanical sound of a keyboard shortcut time to decay before the
+// recorder starts retaining microphone samples.
+export const KEYBOARD_RECORDING_START_DELAY_MS = 200;
+
 export interface TakeResult {
   blob: Blob;
   samples: Float32Array;

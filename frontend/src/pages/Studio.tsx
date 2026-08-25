@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, post, upload } from "../api";
 import { formatDuration } from "../App";
-import { listInputDevices, requestInputDevices, StudioRecorder, TakeResult } from "../audio/recorder";
+import {
+  KEYBOARD_RECORDING_START_DELAY_MS,
+  listInputDevices,
+  requestInputDevices,
+  StudioRecorder,
+  TakeResult,
+} from "../audio/recorder";
 import LevelMeter from "../components/LevelMeter";
 import QcPanel from "../components/QcPanel";
 import Waveform from "../components/Waveform";
@@ -40,6 +46,7 @@ export default function Studio({
 
   const recorder = useRef<StudioRecorder | null>(null);
   const timerRef = useRef<number>(0);
+  const keyboardStartTimerRef = useRef<number | null>(null);
   const phaseRef = useRef<Phase>("ready");
   phaseRef.current = phase;
 
@@ -137,6 +144,15 @@ export default function Studio({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ensureRecorder, takeUrl, script, session]);
 
+  useEffect(
+    () => () => {
+      if (keyboardStartTimerRef.current !== null) {
+        window.clearTimeout(keyboardStartTimerRef.current);
+      }
+    },
+    []
+  );
+
   const stopRecording = useCallback(async () => {
     if (!recorder.current || phaseRef.current !== "recording") return;
     clearInterval(timerRef.current);
@@ -211,8 +227,15 @@ export default function Studio({
       if (["INPUT", "TEXTAREA", "SELECT"].includes(t.tagName) || flagOpen) return;
       if (e.code === "Space") {
         e.preventDefault();
-        if (phaseRef.current === "ready") void startRecording();
-        else if (phaseRef.current === "recording") void stopRecording();
+        if (phaseRef.current === "ready") {
+          if (e.repeat || keyboardStartTimerRef.current !== null) return;
+          keyboardStartTimerRef.current = window.setTimeout(() => {
+            keyboardStartTimerRef.current = null;
+            if (phaseRef.current === "ready") void startRecording();
+          }, KEYBOARD_RECORDING_START_DELAY_MS);
+        } else if (phaseRef.current === "recording") {
+          void stopRecording();
+        }
       } else if (
         e.key === "Enter" &&
         phaseRef.current === "review" &&
