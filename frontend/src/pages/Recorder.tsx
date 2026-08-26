@@ -165,6 +165,8 @@ export default function Recorder() {
   const recorder = useRef<StudioRecorder | null>(null);
   const timerRef = useRef<number>(0);
   const keyboardStartTimerRef = useRef<number | null>(null);
+  const startPendingRef = useRef(false);
+  const takeUrlRef = useRef("");
   const phaseRef = useRef<Phase>("ready");
   const sessionStartedAtRef = useRef<number>(Date.now());
   phaseRef.current = phase;
@@ -215,7 +217,13 @@ export default function Recorder() {
     }).catch(() => undefined);
   }, [ctx?.session_id, deviceId, devices]);
 
-  useEffect(() => () => recorder.current?.close(), []);
+  useEffect(
+    () => () => {
+      recorder.current?.close();
+      if (takeUrlRef.current) URL.revokeObjectURL(takeUrlRef.current);
+    },
+    []
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -314,9 +322,10 @@ export default function Recorder() {
   const resetTake = useCallback(() => {
     setTake(null);
     setRec(null);
-    if (takeUrl) URL.revokeObjectURL(takeUrl);
+    if (takeUrlRef.current) URL.revokeObjectURL(takeUrlRef.current);
+    takeUrlRef.current = "";
     setTakeUrl("");
-  }, [takeUrl]);
+  }, []);
 
   const updateWorkflowStep = useCallback(
     (key: string, patch: Partial<WorkflowStep>) => {
@@ -348,6 +357,7 @@ export default function Recorder() {
       updateWorkflowStep("quality", { state: "success", label: "Recording saved successfully" });
       setRec(uploaded);
       setSessionStats((stats) => ({ ...stats, recorded: stats.recorded + 1 }));
+      phaseRef.current = "review";
       setPhase("review");
       return uploaded;
     },
@@ -356,12 +366,17 @@ export default function Recorder() {
 
   const stopRecording = useCallback(async () => {
     if (!recorder.current || phaseRef.current !== "recording") return;
+    // Lock the transition before React renders so a fast double click/key press
+    // cannot call recorder.stop() twice and replace the pending worklet flush.
+    phaseRef.current = "processing";
     clearInterval(timerRef.current);
     setPhase("processing");
     try {
       const result = await recorder.current.stop();
       setTake(result);
-      setTakeUrl(URL.createObjectURL(result.blob));
+      if (takeUrlRef.current) URL.revokeObjectURL(takeUrlRef.current);
+      takeUrlRef.current = URL.createObjectURL(result.blob);
+      setTakeUrl(takeUrlRef.current);
       await uploadCurrentTake(result);
     } catch (e) {
       const message = (e as Error).message;
@@ -376,11 +391,17 @@ export default function Recorder() {
   }, [uploadCurrentTake]);
 
   const startRecording = useCallback(async () => {
+    if (phaseRef.current !== "ready" || startPendingRef.current) return;
+    startPendingRef.current = true;
     setError("");
     try {
       const r = await ensureRecorder();
+      // The user may have navigated or skipped while microphone permission was
+      // being resolved. Do not start a stale recording in that case.
+      if (phaseRef.current !== "ready") return;
       resetTake();
       r.start();
+      phaseRef.current = "recording";
       setPhase("recording");
       const started = performance.now();
       timerRef.current = window.setInterval(() => {
@@ -390,6 +411,8 @@ export default function Recorder() {
       }, 100);
     } catch (e) {
       setError(`Microphone error: ${(e as Error).message}`);
+    } finally {
+      startPendingRef.current = false;
     }
   }, [ensureRecorder, resetTake, stopRecording]);
 
@@ -407,6 +430,7 @@ export default function Recorder() {
       if (!rec) return;
       try {
         setError("");
+        phaseRef.current = "transition";
         setPhase("transition");
         beginWorkflow("Saving and loading next sentence", [
           { key: "save", label: "Saving recording...", state: "active" },
@@ -434,31 +458,47 @@ export default function Recorder() {
         await new Promise((resolve) => window.setTimeout(resolve, 220));
         setWorkflowTitle("");
         setWorkflowSteps([]);
+        phaseRef.current = "ready";
         setPhase("ready");
       } catch (e) {
         const message = (e as Error).message;
         setError(message);
         updateWorkflowStep("save", { state: "error", label: "Save failed", detail: message });
+        phaseRef.current = "review";
         setPhase("review");
       }
     },
     [beginWorkflow, loadDashboard, rec, resetTake, updateWorkflowStep]
   );
 
-  const restart = useCallback(async () => {
-    if (rec) {
-      await post(`/api/recordings/${rec.id}/reject`, { note: "re-recorded" }).catch(() => undefined);
-    }
+  const restart = useCallback(() => {
+    if (phaseRef.current !== "review" && phaseRef.current !== "processing") return;
+
+    const previousRecording = rec;
+    // Restart is a local interaction first. Unlock the microphone immediately
+    // instead of making the recorder wait for file/database cleanup.
+    phaseRef.current = "ready";
+    clearInterval(timerRef.current);
+    setError("");
     setSessionStats((stats) => ({ ...stats, restarted: stats.restarted + 1 }));
     resetTake();
     setWorkflowTitle("");
     setWorkflowSteps([]);
     setPhase("ready");
     setElapsed(0);
+
+    if (previousRecording) {
+      // Rejection is idempotent on the server. Cleanup can safely finish while
+      // the recorder starts the replacement take.
+      void post(`/api/recordings/${previousRecording.id}/reject`, {
+        note: "re-recorded",
+      }).catch(() => undefined);
+    }
   }, [rec, resetTake]);
 
   const skip = useCallback(async () => {
-    if (!script) return;
+    if (!script || phaseRef.current === "recording" || phaseRef.current === "transition") return;
+    phaseRef.current = "transition";
     setError("");
     if (rec) {
       await post(`/api/recordings/${rec.id}/reject`, { note: "skipped by recorder" }).catch(() => undefined);
@@ -497,6 +537,7 @@ export default function Recorder() {
         await new Promise((resolve) => window.setTimeout(resolve, 220));
         setWorkflowTitle("");
         setWorkflowSteps([]);
+        phaseRef.current = "ready";
         setPhase("ready");
       } else {
         setScript(null);
@@ -505,12 +546,14 @@ export default function Recorder() {
           state: "success",
           label: "No more sentences left",
         });
+        phaseRef.current = "ready";
         setPhase("ready");
       }
     } catch (e) {
       const message = (e as Error).message;
       setError(message);
       updateWorkflowStep("next", { state: "error", label: "Could not load the next sentence", detail: message });
+      phaseRef.current = "ready";
       setPhase("ready");
     }
   }, [beginWorkflow, loadDashboard, script, rec, resetTake, updateWorkflowStep]);

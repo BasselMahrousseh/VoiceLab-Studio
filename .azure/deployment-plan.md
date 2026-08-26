@@ -121,6 +121,11 @@ mount.
 
 ### Validation proof
 
+- Recorder restart release validation (2026-08-26):
+  - `npm run typecheck`: passed.
+  - `npm run build`: passed; 856 modules transformed and the production SPA emitted successfully.
+  - `npm audit --omit=dev --audit-level=high`: passed with no high or critical advisories.
+  - The production workflow retains `python -m pytest backend/tests -q` as a required pre-deployment gate; this release does not modify backend code.
 - `python -m pytest backend/tests -q`: 107 passed.
 - `npm run typecheck`: passed.
 - `npm run build`: passed; production SPA emitted to `frontend/dist`.
